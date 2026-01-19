@@ -51,7 +51,8 @@ API_KEY=your-secure-api-key-here
 FRONTEND_URL=https://temp-placeholder.com
 
 # Database & Redis
-DATABASE_URL=your-supabase-postgresql-url
+DATABASE_URL=your-supabase-pooler-url-port-6543
+DIRECT_URL=your-supabase-direct-url-port-5432
 REDIS_URL=your-upstash-redis-url
 
 # Apollo
@@ -229,4 +230,5 @@ FRONTEND_URL: z.string().url().optional(),
 **Your Railway URL:** `_____________________________________`
 
 **Next Step:** Deploy frontend to Vercel
+
 

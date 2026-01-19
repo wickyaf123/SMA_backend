@@ -17,6 +17,7 @@ const envSchema = z.object({
 
   // Database
   DATABASE_URL: z.string().url('DATABASE_URL must be a valid URL'),
+  DIRECT_URL: z.string().url('DIRECT_URL must be a valid URL').optional(),
 
   // Redis
   REDIS_URL: z.string().url('REDIS_URL must be a valid URL'),
