@@ -445,10 +445,24 @@ export class GoHighLevelClient {
       const conversationId = conversations[0].id;
       const messagesResponse = await this.api.get(`/conversations/${conversationId}/messages`);
 
-      const messages = messagesResponse.data.messages || [];
+      // Handle different possible response structures from GHL API
+      let messages: any[] = [];
+      if (Array.isArray(messagesResponse.data)) {
+        messages = messagesResponse.data;
+      } else if (Array.isArray(messagesResponse.data?.messages)) {
+        messages = messagesResponse.data.messages;
+      } else if (messagesResponse.data?.messages?.messages && Array.isArray(messagesResponse.data.messages.messages)) {
+        messages = messagesResponse.data.messages.messages;
+      }
       
       logger.debug(
-        { ghlContactId, conversationId, messageCount: messages.length },
+        { 
+          ghlContactId, 
+          conversationId, 
+          messageCount: messages.length,
+          responseType: typeof messagesResponse.data,
+          responseKeys: messagesResponse.data ? Object.keys(messagesResponse.data) : [],
+        },
         'GHL conversation messages fetched'
       );
 
