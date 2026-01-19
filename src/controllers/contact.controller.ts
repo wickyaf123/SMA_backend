@@ -260,13 +260,13 @@ export class ContactController {
       if (employeeGrowth) {
         searchParams.organization_employee_growth_rate = employeeGrowth;
       }
-      if (apolloSettings.personLocations?.length > 0) {
+      if (apolloSettings.personLocations && apolloSettings.personLocations.length > 0) {
         searchParams.person_locations = apolloSettings.personLocations;
       }
-      if (apolloSettings.personSeniorities?.length > 0) {
+      if (apolloSettings.personSeniorities && apolloSettings.personSeniorities.length > 0) {
         searchParams.person_seniorities = apolloSettings.personSeniorities;
       }
-      if (apolloSettings.industryTagIds?.length > 0) {
+      if (apolloSettings.industryTagIds && apolloSettings.industryTagIds.length > 0) {
         searchParams.organization_industry_tag_ids = apolloSettings.industryTagIds;
       }
       if (apolloSettings.fundingStage) {

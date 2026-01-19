@@ -95,8 +95,8 @@ async function processGoogleMapsScrape(
   if (config.useSettings) {
     const apifySettings = await settingsService.getApifySettings();
     finalConfig = {
-      query: config.query || apifySettings.query,
-      location: config.location || apifySettings.location,
+      query: config.query || apifySettings.searchTerms[0],
+      location: config.location || apifySettings.locations[0],
       maxResults: config.maxResults || apifySettings.maxResults,
     };
   }

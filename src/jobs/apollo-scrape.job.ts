@@ -36,6 +36,7 @@ export class ApolloScrapeJob {
    */
   async run(config: ApolloJobConfig = {}): Promise<ApolloJobResult> {
     const startTime = Date.now();
+    let industry = 'unknown';
 
     try {
       // Check if configured
@@ -57,7 +58,7 @@ export class ApolloScrapeJob {
 
       // Get Apollo settings from database
       const apolloSettings = await settingsService.getApolloSettings();
-      const industry = apolloSettings.industry;
+      industry = apolloSettings.industry;
 
       logger.info({ industry, config }, 'Starting Apollo scrape job with settings from database');
 

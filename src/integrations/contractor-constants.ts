@@ -46,6 +46,12 @@ export const SUGGESTED_METROS = [
 ];
 
 /**
+ * @deprecated Use SUGGESTED_METROS instead
+ * Kept for backward compatibility
+ */
+export const TARGET_METROS = SUGGESTED_METROS;
+
+/**
  * SUGGESTED Excluded Metro Areas (Southern California)
  * These are examples only - actual values must be configured in Settings
  */
@@ -66,6 +72,12 @@ export const SUGGESTED_PRIORITY_STATES = {
   HVAC: ['TX', 'AZ', 'FL', 'CA', 'NC', 'GA'],
   ROOFING: ['TX', 'FL', 'CA', 'NC', 'GA', 'AZ'],
 };
+
+/**
+ * @deprecated Use SUGGESTED_PRIORITY_STATES instead
+ * Kept for backward compatibility
+ */
+export const PRIORITY_STATES = SUGGESTED_PRIORITY_STATES;
 
 /**
  * Company Name Exclusion Terms
@@ -132,6 +144,12 @@ export const SUGGESTED_CONTRACTOR_JOB_TITLES = [
 ];
 
 /**
+ * @deprecated Use SUGGESTED_CONTRACTOR_JOB_TITLES instead
+ * Kept for backward compatibility
+ */
+export const CONTRACTOR_JOB_TITLES = SUGGESTED_CONTRACTOR_JOB_TITLES;
+
+/**
  * SUGGESTED Company Size Filters
  * These are examples only - actual values must be configured in Settings
  */
@@ -141,6 +159,12 @@ export const SUGGESTED_CONTRACTOR_SIZE_FILTERS = {
   revenueMin: 1000000, // $1M
   revenueMax: 10000000, // $10M
 };
+
+/**
+ * @deprecated Use SUGGESTED_CONTRACTOR_SIZE_FILTERS instead
+ * Kept for backward compatibility
+ */
+export const CONTRACTOR_SIZE_FILTERS = SUGGESTED_CONTRACTOR_SIZE_FILTERS;
 
 /**
  * Check if company name should be excluded based on negative filters

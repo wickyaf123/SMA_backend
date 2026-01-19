@@ -17,8 +17,6 @@ export interface Settings {
   defaultEmailCampaignId: string | null;
   defaultSmsCampaignId: string | null;
   // Apify (Google Maps) Scraper Settings - Expanded
-  apifyQuery: string | null;
-  apifyLocation: string | null;
   apifySearchTerms: string[];
   apifyLocations: string[];
   apifyIndustries: string[];

@@ -42,7 +42,7 @@ export class ContractorController {
 
       // Build search with spec defaults
       const searchParams = buildSolarSearch({
-        locations: PRIORITY_STATES.SOLAR.map(state => `${state}, United States`),
+        locations: PRIORITY_STATES.SOLAR.map((state: string) => `${state}, United States`),
         excludeSouthernCalifornia,
         revenueMin: CONTRACTOR_SIZE_FILTERS.revenueMin,
         revenueMax: CONTRACTOR_SIZE_FILTERS.revenueMax,
@@ -85,7 +85,7 @@ export class ContractorController {
       logger.info('HVAC contractor import (Apollo preset)');
 
       const searchParams = buildHVACSearch({
-        locations: PRIORITY_STATES.HVAC.map(state => `${state}, United States`),
+        locations: PRIORITY_STATES.HVAC.map((state: string) => `${state}, United States`),
         revenueMin: CONTRACTOR_SIZE_FILTERS.revenueMin,
         revenueMax: CONTRACTOR_SIZE_FILTERS.revenueMax,
         employeesMin: CONTRACTOR_SIZE_FILTERS.employeesMin,
@@ -127,7 +127,7 @@ export class ContractorController {
       logger.info('Roofing contractor import (Apollo preset)');
 
       const searchParams = buildRoofingSearch({
-        locations: PRIORITY_STATES.ROOFING.map(state => `${state}, United States`),
+        locations: PRIORITY_STATES.ROOFING.map((state: string) => `${state}, United States`),
         revenueMin: CONTRACTOR_SIZE_FILTERS.revenueMin,
         revenueMax: CONTRACTOR_SIZE_FILTERS.revenueMax,
         employeesMin: CONTRACTOR_SIZE_FILTERS.employeesMin,
@@ -271,7 +271,7 @@ export class ContractorController {
           let searchParams;
           if (industryUpper === 'SOLAR') {
             searchParams = buildSolarSearch({
-              locations: PRIORITY_STATES.SOLAR.map(s => `${s}, United States`),
+              locations: PRIORITY_STATES.SOLAR.map((s: string) => `${s}, United States`),
               excludeSouthernCalifornia: true,
               ...CONTRACTOR_SIZE_FILTERS,
               titles: CONTRACTOR_JOB_TITLES,
@@ -279,14 +279,14 @@ export class ContractorController {
             });
           } else if (industryUpper === 'HVAC') {
             searchParams = buildHVACSearch({
-              locations: PRIORITY_STATES.HVAC.map(s => `${s}, United States`),
+              locations: PRIORITY_STATES.HVAC.map((s: string) => `${s}, United States`),
               ...CONTRACTOR_SIZE_FILTERS,
               titles: CONTRACTOR_JOB_TITLES,
               page: apolloPage,
             });
           } else {
             searchParams = buildRoofingSearch({
-              locations: PRIORITY_STATES.ROOFING.map(s => `${s}, United States`),
+              locations: PRIORITY_STATES.ROOFING.map((s: string) => `${s}, United States`),
               ...CONTRACTOR_SIZE_FILTERS,
               titles: CONTRACTOR_JOB_TITLES,
               page: apolloPage,
