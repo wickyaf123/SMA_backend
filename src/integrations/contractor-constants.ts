@@ -1,13 +1,17 @@
 /**
  * Contractor Lead Generation Constants
  * Spec: January 2, 2026 - Stark
+ * 
+ * ⚠️ WARNING: These are SUGGESTED values only
+ * Do NOT use these as defaults in the application
+ * All scraper configuration MUST come from user Settings
  */
 
 /**
- * Target Metro Areas for Google Maps Scraper
- * Priority order for Solar, HVAC, and Roofing contractors
+ * SUGGESTED Metro Areas for Google Maps Scraper
+ * These are examples only - actual values must be configured in Settings
  */
-export const TARGET_METROS = [
+export const SUGGESTED_METROS = [
   // California (excluding Southern CA metros)
   'San Francisco, CA',
   'San Jose, CA',
@@ -42,10 +46,10 @@ export const TARGET_METROS = [
 ];
 
 /**
- * Excluded Metro Areas (Southern California)
- * Per spec: exclude Los Angeles, Orange County, San Diego, Riverside, San Bernardino
+ * SUGGESTED Excluded Metro Areas (Southern California)
+ * These are examples only - actual values must be configured in Settings
  */
-export const EXCLUDED_METROS = [
+export const SUGGESTED_EXCLUDED_METROS = [
   'Los Angeles, CA',
   'Orange County, CA',
   'San Diego, CA',
@@ -54,9 +58,10 @@ export const EXCLUDED_METROS = [
 ];
 
 /**
- * Priority State Order by Industry
+ * SUGGESTED Priority State Order by Industry
+ * These are examples only - actual values must be configured in Settings
  */
-export const PRIORITY_STATES = {
+export const SUGGESTED_PRIORITY_STATES = {
   SOLAR: ['CA', 'TX', 'FL', 'AZ', 'NC'],
   HVAC: ['TX', 'AZ', 'FL', 'CA', 'NC', 'GA'],
   ROOFING: ['TX', 'FL', 'CA', 'NC', 'GA', 'AZ'],
@@ -77,9 +82,10 @@ export const EXCLUDED_COMPANY_TERMS = [
 ];
 
 /**
- * Google Maps Search Terms by Industry
+ * SUGGESTED Google Maps Search Terms by Industry
+ * These are examples only - actual values must be configured in Settings
  */
-export const GOOGLE_MAPS_SEARCH_TERMS = {
+export const SUGGESTED_GOOGLE_MAPS_SEARCH_TERMS = {
   SOLAR: [
     'solar installer',
     'solar contractor',
@@ -101,18 +107,20 @@ export const GOOGLE_MAPS_SEARCH_TERMS = {
 };
 
 /**
- * Quality Filters for Google Maps Scraper
+ * SUGGESTED Quality Filters for Google Maps Scraper
+ * These are examples only - actual values must be configured in Settings
  */
-export const GOOGLE_MAPS_QUALITY_FILTERS = {
+export const SUGGESTED_GOOGLE_MAPS_QUALITY_FILTERS = {
   minReviews: 10,
   minRating: 3.5,
   excludeClosed: true,
 };
 
 /**
- * Default Job Titles for Contractor Decision Makers
+ * SUGGESTED Job Titles for Contractor Decision Makers
+ * These are examples only - actual values must be configured in Settings
  */
-export const CONTRACTOR_JOB_TITLES = [
+export const SUGGESTED_CONTRACTOR_JOB_TITLES = [
   'Owner',
   'CEO',
   'President',
@@ -124,9 +132,10 @@ export const CONTRACTOR_JOB_TITLES = [
 ];
 
 /**
- * Default Company Size Filters
+ * SUGGESTED Company Size Filters
+ * These are examples only - actual values must be configured in Settings
  */
-export const CONTRACTOR_SIZE_FILTERS = {
+export const SUGGESTED_CONTRACTOR_SIZE_FILTERS = {
   employeesMin: 10,
   employeesMax: 100,
   revenueMin: 1000000, // $1M

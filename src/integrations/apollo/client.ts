@@ -288,10 +288,12 @@ export class ApolloClient {
    * 
    * @param contacts - Array of contacts with Apollo ID or email
    * @param webhookUrl - Your public webhook URL to receive the phone numbers
+   * @param revealPhone - Whether to reveal phone numbers (default: true)
    */
   public async requestMobilePhones(
     contacts: Array<{ id?: string; email?: string; first_name?: string; last_name?: string }>,
-    webhookUrl: string
+    webhookUrl: string,
+    revealPhone: boolean = true
   ): Promise<void> {
     logger.info({
       count: contacts.length,
@@ -304,7 +306,7 @@ export class ApolloClient {
           async () => {
             await this.client.post('/people/match', {
               ...contact,
-              reveal_phone_number: true,
+              reveal_phone_number: revealPhone,
               webhook_url: webhookUrl,
             } as ApolloMobilePhoneRequest);
 

@@ -72,6 +72,15 @@ export function normalizeApifyListing(
     // Website and domain
     const website = listing.website;
     const domain = extractDomain(website);
+    
+    // Extract email from Apify scraping (if scrapeContacts was enabled)
+    const email = extractEmailFromListing(listing);
+    
+    // Extract social media profiles
+    const socialProfiles = extractSocialProfiles(listing);
+    
+    // Extract reviews (if scraped)
+    const reviews = listing.reviews?.slice(0, 5); // Top 5 reviews
 
     const normalized: NormalizedApifyContact = {
       // Business Info
@@ -82,7 +91,7 @@ export function normalizeApifyListing(
       phone: phoneRaw,
       phoneFormatted: phoneFormatted,
       website: website,
-      email: undefined, // Will be enriched by Hunter.io
+      email: email, // NOW extracted from Apify if available!
 
       // Address
       address: listing.address,
@@ -100,6 +109,11 @@ export function normalizeApifyListing(
       placeId: listing.placeId,
       rating: listing.totalScore,
       reviewCount: listing.reviewsCount,
+      
+      // Extended data
+      socialProfiles: socialProfiles,
+      reviews: reviews,
+      openingHours: listing.openingHours,
 
       // Metadata
       dataSource: 'GOOGLE_MAPS',
@@ -294,6 +308,47 @@ export function toContactCreateData(contact: NormalizedApifyContact) {
 }
 
 /**
+ * Helper function to extract email from various fields
+ */
+function extractEmailFromListing(listing: ApifyBusinessListing): string | undefined {
+  // Apify might put emails in different fields depending on scrapeContacts
+  const email = listing.email 
+    || (listing as any).emails?.[0] 
+    || (listing as any).contactEmail
+    || (listing as any).primaryEmail;
+  
+  if (email && isValidEmail(email)) {
+    return email;
+  }
+  
+  return undefined;
+}
+
+/**
+ * Helper function to extract social profiles
+ */
+function extractSocialProfiles(listing: ApifyBusinessListing): Record<string, string> {
+  const profiles: Record<string, string> = {};
+  
+  if ((listing as any).facebook) profiles.facebook = (listing as any).facebook;
+  if ((listing as any).instagram) profiles.instagram = (listing as any).instagram;
+  if ((listing as any).linkedin) profiles.linkedin = (listing as any).linkedin;
+  if ((listing as any).twitter) profiles.twitter = (listing as any).twitter;
+  if ((listing as any).youtube) profiles.youtube = (listing as any).youtube;
+  if ((listing as any).tiktok) profiles.tiktok = (listing as any).tiktok;
+  
+  return profiles;
+}
+
+/**
+ * Helper to validate email format
+ */
+function isValidEmail(email: string): boolean {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+/**
  * Calculate data quality score (0-100)
  */
 function calculateDataQuality(contact: NormalizedApifyContact): number {
@@ -321,6 +376,14 @@ function calculateDataQuality(contact: NormalizedApifyContact): number {
   // Rating/Reviews (credibility)
   if (contact.rating && contact.rating >= 4) score += 5;
   if (contact.reviewCount && contact.reviewCount >= 10) score += 3;
+  
+  // Bonus for extended data
+  if (contact.socialProfiles && Object.keys(contact.socialProfiles).length > 0) {
+    score += 5; // Social media presence
+  }
+  if (contact.reviews && contact.reviews.length > 0) {
+    score += 3; // Has customer reviews
+  }
 
   return Math.min(score, 100);
 }

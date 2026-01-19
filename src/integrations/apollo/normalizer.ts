@@ -331,6 +331,7 @@ export function buildSearchParamsForIndustry(
     technologies?: string[];
     page?: number;
     perPage?: number;
+    enrichPhones?: boolean;
   } = {}
 ): any {
   const {
@@ -355,6 +356,7 @@ export function buildSearchParamsForIndustry(
     technologies = [],
     page = 1,
     perPage = 100,
+    enrichPhones = true,
   } = options;
 
   // Spec-compliant priority locations by industry
@@ -392,7 +394,7 @@ export function buildSearchParamsForIndustry(
     
     // Reveal contact info
     reveal_personal_emails: true,
-    reveal_phone_number: true,
+    reveal_phone_number: enrichPhones,
   };
 
   // Industry-specific keywords (spec-compliant)

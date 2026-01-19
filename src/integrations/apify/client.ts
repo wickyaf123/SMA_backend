@@ -216,6 +216,19 @@ export class ApifyClient {
       minRating?: number;
       requireWebsite?: boolean;
       skipClosed?: boolean;
+      language?: string;
+      searchMatching?: 'all' | 'exact';
+      scrapePlaceDetails?: boolean;
+      scrapeContacts?: boolean;
+      scrapeReviews?: boolean;
+      maxReviews?: number;
+      scrapeSocialMedia?: {
+        facebooks?: boolean;
+        instagrams?: boolean;
+        youtubes?: boolean;
+        tiktoks?: boolean;
+        twitters?: boolean;
+      };
     }
   ): Promise<ApifyBusinessListing[]> {
     // Ensure maxResults is always an integer (Apify requirement)
@@ -225,14 +238,19 @@ export class ApifyClient {
       searchStringsArray: [searchQuery],
       locationQuery: location,
       maxCrawledPlacesPerSearch: safeMaxResults,
-      language: 'en',
+      language: options?.language || 'en',
+      searchMatching: options?.searchMatching,
       skipClosedPlaces: options?.skipClosed !== false,
       website: options?.requireWebsite ? 'withWebsite' : 'allPlaces',
       placeMinimumStars: this.convertRatingToApifyFormat(options?.minRating),
-      scrapePlaceDetailPage: false,
-      scrapeContacts: false,
-      maxReviews: 0,
-      maxImages: 0,
+      
+      // Extended scraping options
+      scrapePlaceDetailPage: options?.scrapePlaceDetails ?? false,
+      scrapeContacts: options?.scrapeContacts ?? false,
+      maxReviews: options?.scrapeReviews ? (options?.maxReviews || 0) : 0,
+      scrapeSocialMediaProfiles: options?.scrapeSocialMedia,
+      
+      maxImages: 0, // Keep 0 unless needed later
     };
 
     return this.scrapeAndWait(input, 600000); // 10 minute timeout for production

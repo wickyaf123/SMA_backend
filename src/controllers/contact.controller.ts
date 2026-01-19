@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { contactService } from '../services/contact/contact.service';
 import { leadIngestionService } from '../services/lead/ingestion.service';
 import { importJobService } from '../services/import/import-job.service';
+import { settingsService } from '../services/settings/settings.service';
 import { buildSearchParamsForIndustry } from '../integrations/apollo/normalizer';
 import { successResponse, errorResponse } from '../utils/response';
 import { logger } from '../utils/logger';
@@ -191,39 +192,33 @@ export class ContactController {
     next: NextFunction
   ): Promise<void> {
     try {
+      // Get Apollo settings - will throw if not configured
+      const apolloSettings = await settingsService.getApolloSettings();
+      
       const {
         // Person filters
-        personTitles,
+        personTitles = apolloSettings.personTitles,
         
         // Organization filters
-        organizationLocations,
-        excludeLocations,
-        industry,
+        organizationLocations = apolloSettings.locations,
+        excludeLocations = apolloSettings.excludeLocations,
+        industry = apolloSettings.industry,
         
         // Size filters
-        employeesMin,
-        employeesMax,
-        revenueMin,
-        revenueMax,
+        employeesMin = apolloSettings.employeesMin,
+        employeesMax = apolloSettings.employeesMax,
+        revenueMin = apolloSettings.revenueMin,
+        revenueMax = apolloSettings.revenueMax,
         
         // Technology and growth
-        technologies,
-        employeeGrowth,
+        technologies = apolloSettings.technologies,
+        employeeGrowth = apolloSettings.employeeGrowthRate,
         
         // Pagination and limits
-        page,
-        perPage,
-        enrichLimit = 100, // Max contacts to enrich (default: 100)
+        page = apolloSettings.page,
+        perPage = apolloSettings.perPage,
+        enrichLimit = apolloSettings.enrichLimit,
       } = req.body;
-
-      // REQUIRE industry to ensure we only get qualified contractor leads
-      if (!industry || !['HVAC', 'SOLAR', 'ROOFING'].includes(industry)) {
-        res.status(400).json(errorResponse(
-          'Industry is required. Must be one of: HVAC, SOLAR, ROOFING',
-          400
-        ));
-        return;
-      }
 
       logger.info({
         industry,
@@ -232,90 +227,61 @@ export class ContactController {
         enrichLimit,
       }, 'Starting Apollo import request');
 
-      // Spec-compliant industry keywords (January 2, 2026 spec)
-      const INDUSTRY_KEYWORDS = {
-        HVAC: 'HVAC OR "Heating and Air Conditioning" OR "Air Conditioning Contractor" OR "HVAC Services"',
-        SOLAR: '"Solar Energy" OR "battery installer" OR "Solar Installation" OR "Renewable Energy" OR "Solar Contractor"',
-        ROOFING: 'Roofing OR "Roofing Contractor" OR "Roof Installation" OR "Residential Roofing"',
-      };
-
-      // Spec-compliant priority states by industry
-      const PRIORITY_LOCATIONS = {
-        SOLAR: ['California, United States', 'Texas, United States', 'Florida, United States', 'Arizona, United States', 'North Carolina, United States'],
-        HVAC: ['Texas, United States', 'Arizona, United States', 'Florida, United States', 'California, United States', 'North Carolina, United States', 'Georgia, United States'],
-        ROOFING: ['Texas, United States', 'Florida, United States', 'California, United States', 'North Carolina, United States', 'Georgia, United States', 'Arizona, United States'],
-      };
-
-      // Build Apollo search params with REQUIRED contractor filters
+      // Build Apollo search params using settings (no hardcoded defaults)
       const searchParams: any = {
-        // Decision maker titles (spec: Owner, CEO, President, COO, VP Operations, VP Sales, General Manager)
-        person_titles: personTitles || [
-          'Owner',
-          'CEO',
-          'President',
-          'COO',
-          'VP Operations',
-          'VP Sales',
-          'General Manager',
-        ],
-        
-        // Location filter - use provided or industry-specific defaults
-        organization_locations: organizationLocations || PRIORITY_LOCATIONS[industry as keyof typeof PRIORITY_LOCATIONS],
-        
-        // Pagination
-        page: page || 1,
-        per_page: perPage || 100,
+        person_titles: personTitles,
+        organization_locations: organizationLocations,
+        page,
+        per_page: perPage,
         reveal_personal_emails: true,
-        reveal_phone_number: true,
+        reveal_phone_number: apolloSettings.enrichPhones,
         
-        // REQUIRED: Industry keywords (spec-compliant)
-        q_organization_keywords: INDUSTRY_KEYWORDS[industry as keyof typeof INDUSTRY_KEYWORDS],
+        // Use configured keywords from settings
+        q_organization_keywords: apolloSettings.searchKeywords,
+        q_organization_keyword_tags: apolloSettings.organizationKeywordTags,
+        q_organization_not_keyword_tags: apolloSettings.negativeKeywordTags,
         
-        // REQUIRED: Employee range (spec: 10-100 employees)
         organization_num_employees_ranges: employeesMin && employeesMax 
           ? [`${employeesMin},${employeesMax}`] 
-          : ['10,100'],
+          : undefined,
         
-        // REQUIRED: Revenue range (spec: $1M-$10M)
         revenue_range: revenueMin && revenueMax 
           ? { min: revenueMin, max: revenueMax } 
-          : { min: 1000000, max: 10000000 },
-        
-        // REQUIRED: Negative filters - exclude wholesalers, manufacturers, distributors
-        q_organization_not_keyword_tags: [
-          'wholesale',
-          'distribution',
-          'distributor',
-          'manufacturer',
-          'manufacturing',
-          'supply',
-          'supplier',
-        ],
+          : undefined,
       };
 
-      // Add location exclusions (e.g., Southern California for Solar)
-      if (excludeLocations && excludeLocations.length > 0) {
+      // Add optional filters from settings
+      if (excludeLocations?.length > 0) {
         searchParams.organization_not_locations = excludeLocations;
       }
-
-      // Add technologies filter (optional)
-      if (technologies && technologies.length > 0) {
+      if (technologies?.length > 0) {
         searchParams.organization_technologies = technologies;
       }
-
-      // Add employee growth rate filter (optional)
       if (employeeGrowth) {
-        searchParams.organization_employee_growth_rate = `${employeeGrowth}%`;
+        searchParams.organization_employee_growth_rate = employeeGrowth;
+      }
+      if (apolloSettings.personLocations?.length > 0) {
+        searchParams.person_locations = apolloSettings.personLocations;
+      }
+      if (apolloSettings.personSeniorities?.length > 0) {
+        searchParams.person_seniorities = apolloSettings.personSeniorities;
+      }
+      if (apolloSettings.industryTagIds?.length > 0) {
+        searchParams.organization_industry_tag_ids = apolloSettings.industryTagIds;
+      }
+      if (apolloSettings.fundingStage) {
+        searchParams.funding_stage = apolloSettings.fundingStage;
       }
 
       logger.info({
         industry,
         keywords: searchParams.q_organization_keywords,
+        keywordTags: searchParams.q_organization_keyword_tags,
         locations: searchParams.organization_locations,
         employeeRange: searchParams.organization_num_employees_ranges,
         revenueRange: searchParams.revenue_range,
         negativeFilters: searchParams.q_organization_not_keyword_tags,
-      }, 'Apollo search params configured with contractor filters');
+      }, 'Apollo search params configured from settings');
 
       // Start import (async) with enrichment limit
       const result = await leadIngestionService.importFromApollo(searchParams, enrichLimit);
@@ -325,10 +291,12 @@ export class ContactController {
         enrichLimit,
         filtersApplied: {
           industry,
-          employeeRange: searchParams.organization_num_employees_ranges[0],
-          revenueRange: `$${(searchParams.revenue_range.min / 1000000).toFixed(0)}M-$${(searchParams.revenue_range.max / 1000000).toFixed(0)}M`,
-          locations: searchParams.organization_locations.length,
-          excludedTypes: searchParams.q_organization_not_keyword_tags.length,
+          employeeRange: searchParams.organization_num_employees_ranges?.[0] || 'Not specified',
+          revenueRange: searchParams.revenue_range 
+            ? `$${(searchParams.revenue_range.min / 1000000).toFixed(0)}M-$${(searchParams.revenue_range.max / 1000000).toFixed(0)}M`
+            : 'Not specified',
+          locations: searchParams.organization_locations?.length || 0,
+          excludedTypes: searchParams.q_organization_not_keyword_tags?.length || 0,
         },
       }));
     } catch (error) {

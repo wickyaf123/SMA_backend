@@ -7,6 +7,7 @@ import { phoneValidationService } from '../validation/phone.service';
 import { deduplicationService } from './deduplication.service';
 import { csvParserService, CsvParseOptions } from '../import/csv-parser';
 import { importJobService } from '../import/import-job.service';
+import { settingsService } from '../settings/settings.service';
 import { logger } from '../../utils/logger';
 import { ApolloSearchParams } from '../../integrations/apollo/types';
 import { ImportJobType, ContactStatus } from '@prisma/client';
@@ -187,7 +188,10 @@ export class LeadIngestionService {
       const result = await this.processContacts(jobId, filteredContacts);
 
       // ==================== STEP 4: REQUEST MOBILE PHONES (OPTIONAL, ASYNC) ====================
-      if (config.apollo.webhookUrl) {
+      // Check if phone enrichment is enabled
+      const apolloSettings = await settingsService.getApolloSettings();
+      
+      if (config.apollo.webhookUrl && apolloSettings.enrichPhones) {
         logger.info({ jobId }, 'Step 4: Requesting mobile phones via webhook (async)');
         
         const contactsForMobile = normalizedContacts
@@ -203,7 +207,8 @@ export class LeadIngestionService {
         // Fire and forget - don't wait for mobile phone requests
         apolloClient.requestMobilePhones(
           contactsForMobile,
-          config.apollo.webhookUrl
+          config.apollo.webhookUrl,
+          apolloSettings.enrichPhones
         ).catch(error => {
           logger.error({
             jobId,
@@ -216,7 +221,10 @@ export class LeadIngestionService {
           mobileRequests: contactsForMobile.length,
         }, 'Mobile phone requests sent (will arrive via webhook)');
       } else {
-        logger.debug({ jobId }, 'Skipping mobile phone requests (no webhook URL configured)');
+        const reason = !config.apollo.webhookUrl 
+          ? 'no webhook URL configured' 
+          : 'phone enrichment disabled in settings';
+        logger.debug({ jobId, reason }, 'Skipping mobile phone requests');
       }
 
       // ==================== COMPLETE ====================

@@ -8,7 +8,569 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// ==================== ENUMS ====================
+model Company {
+  id               String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  name             String
+  domain           String?   @unique
+  industry         String?
+  size             String?
+  location         String?
+  city             String?
+  state            String?
+  country          String?
+  linkedinUrl      String?
+  website          String?
+  apolloId         String?   @unique
+  enrichmentData   Json?
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  dataSources      String[]  @default([])
+  dataQuality      Int?      @default(0)
+  apifyId          String?   @unique
+  hunterEnrichedAt DateTime?
+  contacts         Contact[]
+
+  @@index([domain])
+  @@index([name])
+  @@index([apifyId])
+  @@index([dataQuality])
+}
+
+model Contact {
+  id                    String                @id @default(dbgenerated("(gen_random_uuid())::text"))
+  email                 String                @unique
+  firstName             String?
+  lastName              String?
+  fullName              String?
+  phone                 String?
+  phoneFormatted        String?
+  title                 String?
+  linkedinUrl           String?
+  linkedinId            String?
+  timezone              String?
+  city                  String?
+  state                 String?
+  country               String?
+  companyId             String?
+  status                ContactStatus         @default(NEW)
+  emailValidationStatus EmailValidationStatus @default(PENDING)
+  phoneValidationStatus PhoneValidationStatus @default(PENDING)
+  emailValidatedAt      DateTime?             @db.Timestamptz(6)
+  phoneValidatedAt      DateTime?             @db.Timestamptz(6)
+  source                String?
+  sourceId              String?
+  apolloId              String?               @unique
+  hasReplied            Boolean               @default(false)
+  repliedAt             DateTime?             @db.Timestamptz(6)
+  repliedChannel        OutreachChannel?
+  tags                  String[]              @default([])
+  customFields          Json?
+  enrichmentData        Json?
+  createdAt             DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+  lastContactedAt       DateTime?             @db.Timestamptz(6)
+  ghlContactId          String?               @unique
+  ghlConversationId     String?
+  dataSources           String[]              @default([])
+  dataQuality           Int?                  @default(0)
+  apifyId               String?               @unique
+  hunterEnrichedAt      DateTime?
+  hunterScore           Int?
+  googlePlaceId         String?               @unique
+  activityLogs          ActivityLog[]
+  campaignEnrollments   CampaignEnrollment[]
+  company               Company?              @relation(fields: [companyId], references: [id])
+  linkedInActions       LinkedInAction[]
+  outreachSteps         OutreachStep[]
+  replies               Reply[]
+  sequenceEnrollments   SequenceEnrollment[]
+
+  @@index([email])
+  @@index([status])
+  @@index([companyId])
+  @@index([hasReplied])
+  @@index([createdAt])
+  @@index([apifyId])
+  @@index([dataQuality])
+  @@index([ghlContactId])
+}
+
+model Campaign {
+  id                  String                @id @default(uuid())
+  name                String
+  channel             OutreachChannel
+  instantlyCampaignId String?
+  phantomBusterId     String?
+  googleSheetUrl      String?
+  status              CampaignStatus        @default(DRAFT)
+  description         String?
+  settings            Json?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  linkedinEnabled     Boolean               @default(true)
+  enrollments         CampaignEnrollment[]
+  routingRules        CampaignRoutingRule[]
+
+  @@index([status])
+  @@index([channel])
+  @@index([instantlyCampaignId])
+  @@index([createdAt])
+}
+
+model CampaignRoutingRule {
+  id                 String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  name               String
+  description        String?
+  priority           Int      @default(0)
+  isActive           Boolean  @default(true)
+  matchMode          String   @default("ALL")
+  sourceFilter       String[] @default([])
+  industryFilter     String[] @default([])
+  stateFilter        String[] @default([])
+  countryFilter      String[] @default([])
+  tagsFilter         String[] @default([])
+  employeesMinFilter Int?
+  employeesMaxFilter Int?
+  campaignId         String
+  createdAt          DateTime @default(now()) @db.Timestamp(6)
+  updatedAt          DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  campaign           Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([isActive, priority(sort: Desc)])
+  @@index([campaignId])
+}
+
+model CampaignEnrollment {
+  id            String           @id @default(uuid())
+  campaignId    String
+  contactId     String
+  status        EnrollmentStatus @default(ENROLLED)
+  enrolledAt    DateTime         @default(now())
+  stoppedAt     DateTime?
+  stoppedReason String?
+  externalId    String?
+  metadata      Json?
+  campaign      Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact       Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, contactId])
+  @@index([campaignId])
+  @@index([contactId])
+  @@index([status])
+  @@index([enrolledAt])
+}
+
+model Sequence {
+  id                String               @id @default(dbgenerated("(gen_random_uuid())::text"))
+  name              String
+  description       String?
+  status            SequenceStatus       @default(DRAFT)
+  channels          OutreachChannel[]    @default([])
+  settings          Json?
+  businessHoursOnly Boolean              @default(true)
+  respectTimezone   Boolean              @default(true)
+  maxContactsPerDay Int?
+  totalEnrolled     Int                  @default(0)
+  totalCompleted    Int                  @default(0)
+  totalReplied      Int                  @default(0)
+  createdAt         DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
+  excludeWeekends   Boolean              @default(true)
+  enrollments       SequenceEnrollment[]
+  steps             SequenceStep[]
+
+  @@index([status])
+}
+
+model SequenceStep {
+  id                 String              @id @default(dbgenerated("(gen_random_uuid())::text"))
+  sequenceId         String
+  order              Int
+  channel            OutreachChannel
+  delayDays          Int                 @default(0)
+  delayHours         Int                 @default(0)
+  delayMinutes       Int                 @default(0)
+  subject            String?
+  body               String
+  templateId         String?
+  linkedinActionType LinkedInActionType?
+  randomDelayMin     Int                 @default(0)
+  randomDelayMax     Int                 @default(30)
+  variants           Json?
+  totalSent          Int                 @default(0)
+  totalDelivered     Int                 @default(0)
+  totalOpened        Int                 @default(0)
+  totalClicked       Int                 @default(0)
+  totalReplied       Int                 @default(0)
+  createdAt          DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
+  outreachSteps      OutreachStep[]
+  sequence           Sequence            @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+
+  @@unique([sequenceId, order])
+  @@index([sequenceId])
+}
+
+model SequenceEnrollment {
+  id               String        @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId        String
+  sequenceId       String
+  currentStepOrder Int           @default(0)
+  status           ContactStatus @default(IN_SEQUENCE)
+  isPaused         Boolean       @default(false)
+  pausedAt         DateTime?     @db.Timestamptz(6)
+  pauseReason      String?
+  enrolledAt       DateTime      @default(now()) @db.Timestamptz(6)
+  completedAt      DateTime?     @db.Timestamptz(6)
+  lastStepAt       DateTime?     @db.Timestamptz(6)
+  nextStepAt       DateTime?     @db.Timestamptz(6)
+  contact          Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  sequence         Sequence      @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, sequenceId])
+  @@index([sequenceId])
+  @@index([status])
+  @@index([nextStepAt])
+}
+
+model OutreachStep {
+  id             String             @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId      String
+  sequenceStepId String?
+  channel        OutreachChannel
+  status         OutreachStepStatus @default(PENDING)
+  scheduledAt    DateTime?          @db.Timestamptz(6)
+  sentAt         DateTime?          @db.Timestamptz(6)
+  deliveredAt    DateTime?          @db.Timestamptz(6)
+  openedAt       DateTime?          @db.Timestamptz(6)
+  clickedAt      DateTime?          @db.Timestamptz(6)
+  repliedAt      DateTime?          @db.Timestamptz(6)
+  failedAt       DateTime?          @db.Timestamptz(6)
+  subject        String?
+  body           String?
+  externalId     String?
+  messageId      String?
+  errorMessage   String?
+  errorCode      String?
+  retryCount     Int                @default(0)
+  maxRetries     Int                @default(3)
+  metadata       Json?
+  createdAt      DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+  contact        Contact            @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  sequenceStep   SequenceStep?      @relation(fields: [sequenceStepId], references: [id])
+
+  @@index([contactId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([channel])
+}
+
+model LinkedInAction {
+  id               String                   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId        String
+  actionType       LinkedInActionType
+  status           OutreachStepStatus       @default(PENDING)
+  connectionStatus LinkedInConnectionStatus @default(NOT_CONNECTED)
+  scheduledAt      DateTime?                @db.Timestamptz(6)
+  executedAt       DateTime?                @db.Timestamptz(6)
+  message          String?
+  phantomId        String?
+  phantomOutput    Json?
+  errorMessage     String?
+  retryCount       Int                      @default(0)
+  createdAt        DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
+  contact          Contact                  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@index([status])
+  @@index([scheduledAt])
+}
+
+model Reply {
+  id          String          @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId   String
+  channel     OutreachChannel
+  content     String?
+  subject     String?
+  externalId  String?
+  messageId   String?
+  inReplyTo   String?
+  fromAddress String?
+  receivedAt  DateTime        @db.Timestamptz(6)
+  rawPayload  Json?
+  isProcessed Boolean         @default(false)
+  processedAt DateTime?       @db.Timestamptz(6)
+  createdAt   DateTime        @default(now()) @db.Timestamptz(6)
+  threadId    String?
+  contact     Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@index([channel])
+  @@index([receivedAt])
+  @@index([isProcessed])
+}
+
+model ActivityLog {
+  id          String           @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId   String?
+  action      String
+  channel     OutreachChannel?
+  description String?
+  metadata    Json?
+  actorType   String           @default("system")
+  actorId     String?
+  createdAt   DateTime         @default(now()) @db.Timestamptz(6)
+  contact     Contact?         @relation(fields: [contactId], references: [id])
+
+  @@index([contactId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model SystemConfig {
+  id          String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  key         String   @unique
+  value       Json
+  description String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+}
+
+model RateLimitLog {
+  id          String          @id @default(dbgenerated("(gen_random_uuid())::text"))
+  channel     OutreachChannel
+  action      String
+  count       Int             @default(1)
+  windowStart DateTime        @db.Timestamptz(6)
+  windowEnd   DateTime        @db.Timestamptz(6)
+  createdAt   DateTime        @default(now()) @db.Timestamptz(6)
+
+  @@index([channel, windowStart])
+}
+
+model WebhookLog {
+  id           String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  source       String
+  eventType    String
+  payload      Json
+  processed    Boolean   @default(false)
+  processedAt  DateTime? @db.Timestamptz(6)
+  errorMessage String?
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([source])
+  @@index([processed])
+  @@index([createdAt])
+}
+
+model ImportJob {
+  id               String          @id @default(dbgenerated("(gen_random_uuid())::text"))
+  type             ImportJobType
+  status           ImportJobStatus @default(PENDING)
+  totalRecords     Int             @default(0)
+  processedRecords Int             @default(0)
+  successCount     Int             @default(0)
+  duplicateCount   Int             @default(0)
+  invalidCount     Int             @default(0)
+  errorCount       Int             @default(0)
+  errors           Json?
+  metadata         Json?
+  createdAt        DateTime        @default(now()) @db.Timestamptz(6)
+  startedAt        DateTime?       @db.Timestamptz(6)
+  completedAt      DateTime?       @db.Timestamptz(6)
+  updatedAt        DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Settings {
+  id                      String    @id @default(uuid())
+  linkedinGloballyEnabled Boolean   @default(true)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @default(now()) @updatedAt
+  defaultEmailCampaignId  String?
+  defaultSmsCampaignId    String?
+  
+  // Apify (Google Maps) Scraper - New array-based fields
+  apifySearchTerms        String[]  @default([])
+  apifyLocations          String[]  @default([])
+  apifyIndustries         String[]  @default([])
+  apifyMaxResults         Int?
+  apifyMinRating          Float?    @default(0)
+  apifyRequirePhone       Boolean   @default(true)
+  apifyRequireWebsite     Boolean   @default(false)
+  apifySkipClosed         Boolean   @default(true)
+  apifyLanguage           String?
+  apifySearchMatching     String?
+  apifyScrapePlaceDetails Boolean   @default(false)
+  apifyScrapeContacts     Boolean   @default(false)
+  apifyScrapeReviews      Boolean   @default(false)
+  apifyMaxReviews         Int?      @default(0)
+  apifyScrapeSocialMedia  Json?
+  apifyMinReviewCount     Int?      @default(0)
+  
+  // Apollo Scraper
+  apolloIndustry                String?
+  apolloPersonTitles            String[]  @default([])
+  apolloLocations               String[]  @default([])
+  apolloExcludeLocations        String[]  @default([])
+  apolloEmployeesMin            Int?
+  apolloEmployeesMax            Int?
+  apolloRevenueMin              Int?
+  apolloRevenueMax              Int?
+  apolloEnrichLimit             Int       @default(100)
+  apolloEnrichPhones            Boolean   @default(true)
+  apolloSearchKeywords          String?
+  apolloPersonLocations         String[]  @default([])
+  apolloPersonSeniorities       String[]  @default([])
+  apolloOrganizationKeywordTags String[]  @default([])
+  apolloNegativeKeywordTags     String[]  @default([])
+  apolloTechnologies            String[]  @default([])
+  apolloIndustryTagIds          String[]  @default([])
+  apolloEmployeeGrowthRate      String?
+  apolloFundingStage            String?
+  apolloPage                    Int       @default(1)
+  apolloPerPage                 Int       @default(100)
+  
+  // Pipeline Controls
+  pipelineEnabled         Boolean   @default(true)
+  emailOutreachEnabled    Boolean   @default(true)
+  smsOutreachEnabled      Boolean   @default(true)
+  maintenanceMode         Boolean   @default(false)
+  maintenanceMessage      String?
+  schedulerEnabled        Boolean   @default(true)
+  scrapeJobEnabled        Boolean   @default(true)
+  apolloJobEnabled        Boolean   @default(true)
+  enrichJobEnabled        Boolean   @default(true)
+  mergeJobEnabled         Boolean   @default(true)
+  validateJobEnabled      Boolean   @default(true)
+  enrollJobEnabled        Boolean   @default(true)
+  lastEmergencyStopAt     DateTime? @db.Timestamp(6)
+  lastEmergencyStopBy     String?
+  
+  // Schedule Management
+  scheduleTemplate        String?   @default("balanced")
+  scrapeJobCron           String?   @default("0 6 * * *")
+  apolloJobCron           String?   @default("30 6 * * *")
+  enrichJobCron           String?   @default("0 8 * * *")
+  mergeJobCron            String?   @default("0 9 * * *")
+  validateJobCron         String?   @default("0 10 * * *")
+  enrollJobCron           String?   @default("0 11 * * *")
+  
+  // Campaign Routing
+  routingFallbackBehavior String?   @default("default_campaign")
+}
+
+model MessageTemplate {
+  id          String          @id @default(uuid())
+  name        String
+  channel     TemplateChannel @default(SMS)
+  subject     String?
+  body        String
+  description String?
+  isDefault   Boolean         @default(false)
+  isActive    Boolean         @default(true)
+  usageCount  Int             @default(0)
+  lastUsedAt  DateTime?
+  variables   String[]        @default([])
+  tags        String[]        @default([])
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @default(now()) @updatedAt
+
+  @@index([channel])
+  @@index([isDefault])
+  @@index([isActive])
+}
+
+model MergedContact {
+  id                 String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  winnerContactId    String
+  loserContactId     String
+  loserEmail         String
+  mergeStrategy      String
+  winnerScore        Int?
+  loserScore         Int?
+  fieldsMerged       Json?
+  outreachStepsMoved Int       @default(0)
+  repliesMoved       Int       @default(0)
+  activityLogsMoved  Int       @default(0)
+  enrollmentsDeleted Int       @default(0)
+  loserSnapshot      Json
+  mergedBy           String?
+  mergedAt           DateTime  @default(now())
+  canRollback        Boolean   @default(true)
+  rolledBackAt       DateTime?
+
+  @@index([winnerContactId])
+  @@index([loserContactId])
+  @@index([loserEmail])
+  @@index([mergedAt])
+}
+
+model DailyMetrics {
+  id                 String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  date               DateTime @unique @db.Date
+  contactsImported   Int      @default(0)
+  contactsValidated  Int      @default(0)
+  contactsInvalid    Int      @default(0)
+  contactsDuplicate  Int      @default(0)
+  contactsMerged     Int      @default(0)
+  emailsSent         Int      @default(0)
+  emailsDelivered    Int      @default(0)
+  emailsOpened       Int      @default(0)
+  emailsClicked      Int      @default(0)
+  emailsBounced      Int      @default(0)
+  smsSent            Int      @default(0)
+  smsDelivered       Int      @default(0)
+  smsBounced         Int      @default(0)
+  linkedinSent       Int      @default(0)
+  linkedinAccepted   Int      @default(0)
+  repliesReceived    Int      @default(0)
+  repliesEmail       Int      @default(0)
+  repliesSms         Int      @default(0)
+  repliesLinkedin    Int      @default(0)
+  campaignsStarted   Int      @default(0)
+  campaignsStopped   Int      @default(0)
+  contactsEnrolled   Int      @default(0)
+  emailOpenRate      Float    @default(0)
+  emailReplyRate     Float    @default(0)
+  smsDeliveryRate    Float    @default(0)
+  smsReplyRate       Float    @default(0)
+  linkedinAcceptRate Float    @default(0)
+  overallReplyRate   Float    @default(0)
+  scrapeJobRan       Boolean  @default(false)
+  enrichJobRan       Boolean  @default(false)
+  mergeJobRan        Boolean  @default(false)
+  validateJobRan     Boolean  @default(false)
+  enrollJobRan       Boolean  @default(false)
+  apolloJobRan       Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @default(now()) @updatedAt
+
+  @@index([date])
+  @@index([createdAt])
+}
+
+model ApolloCreditUsage {
+  id             String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  month          String    @unique
+  creditsUsed    Int       @default(0)
+  creditsLimit   Int       @default(2000)
+  searchCredits  Int       @default(0)
+  enrichCredits  Int       @default(0)
+  mobileCredits  Int       @default(0)
+  jobExecutions  Int       @default(0)
+  lastJobAt      DateTime?
+  limitWarningAt DateTime?
+  limitReachedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+
+  @@index([month])
+}
 
 enum ContactStatus {
   NEW
@@ -101,441 +663,6 @@ enum EnrollmentStatus {
   UNSUBSCRIBED
 }
 
-// ==================== MODELS ====================
-
-model Company {
-  id              String    @id @default(uuid())
-  name            String
-  domain          String?   @unique
-  industry        String?
-  size            String?
-  location        String?
-  city            String?
-  state           String?
-  country         String?   @default("United States")
-  linkedinUrl     String?
-  website         String?
-  apolloId        String?   @unique
-  enrichmentData  Json?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  
-  contacts        Contact[]
-  
-  @@index([domain])
-  @@index([name])
-  @@index([apolloId])
-}
-
-model Contact {
-  id                    String                @id @default(uuid())
-  email                 String                @unique
-  firstName             String?
-  lastName              String?
-  fullName              String?
-  phone                 String?
-  phoneFormatted        String?
-  title                 String?
-  linkedinUrl           String?
-  linkedinId            String?
-  timezone              String?
-  city                  String?
-  state                 String?
-  country               String?               @default("United States")
-  
-  companyId             String?
-  company               Company?              @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  
-  status                ContactStatus         @default(NEW)
-  emailValidationStatus EmailValidationStatus @default(PENDING)
-  phoneValidationStatus PhoneValidationStatus @default(PENDING)
-  emailValidatedAt      DateTime?
-  phoneValidatedAt      DateTime?
-  
-  source                String?
-  sourceId              String?
-  apolloId              String?               @unique
-  googlePlaceId         String?               @unique
-  
-  // Phase 3.5: Track data sources and quality
-  dataSources           String[]              @default([])
-  dataQuality           Int                   @default(0)
-  hunterEnrichedAt      DateTime?
-  hunterScore           Int?
-  ghlContactId          String?               @unique
-  ghlConversationId     String?
-  
-  hasReplied            Boolean               @default(false)
-  repliedAt             DateTime?
-  repliedChannel        OutreachChannel?
-  
-  tags                  String[]
-  customFields          Json?
-  enrichmentData        Json?
-  
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
-  lastContactedAt       DateTime?
-  
-  outreachSteps         OutreachStep[]
-  sequenceEnrollments   SequenceEnrollment[]
-  linkedInActions       LinkedInAction[]
-  replies               Reply[]
-  activityLogs          ActivityLog[]
-  campaignEnrollments   CampaignEnrollment[]
-  
-  @@index([email])
-  @@index([status])
-  @@index([companyId])
-  @@index([hasReplied])
-  @@index([createdAt])
-  @@index([apolloId])
-  @@index([source])
-}
-
-model Campaign {
-  id                    String               @id @default(uuid())
-  name                  String
-  channel               OutreachChannel
-  
-  // Platform IDs
-  instantlyCampaignId   String?
-  phantomBusterId       String?
-  googleSheetUrl        String?
-  
-  status                CampaignStatus       @default(DRAFT)
-  
-  description           String?              @db.Text
-  settings              Json?
-  
-  // Phase 3.5 Day 7: LinkedIn Toggle
-  linkedinEnabled       Boolean              @default(true)
-  
-  enrollments           CampaignEnrollment[]
-  routingRules          CampaignRoutingRule[]
-  
-  createdAt             DateTime             @default(now())
-  updatedAt             DateTime             @updatedAt
-  
-  @@index([status])
-  @@index([channel])
-  @@index([instantlyCampaignId])
-  @@index([createdAt])
-}
-
-// Campaign Routing Rules for flexible lead routing to different Instantly campaigns
-model CampaignRoutingRule {
-  id                  String    @id @default(uuid())
-  name                String
-  description         String?
-  priority            Int       @default(0)    // Higher = evaluated first
-  isActive            Boolean   @default(true)
-  
-  // Filter logic mode: ALL = all filters must match (AND), ANY = at least one filter must match (OR)
-  matchMode           String    @default("ALL")
-  
-  // Filter conditions (arrays for flexible matching)
-  sourceFilter        String[]  @default([])   // e.g., ['apollo', 'scraper', 'csv']
-  industryFilter      String[]  @default([])   // e.g., ['HVAC', 'Plumbing']
-  stateFilter         String[]  @default([])   // e.g., ['CA', 'TX', 'FL']
-  countryFilter       String[]  @default([])   // e.g., ['United States']
-  tagsFilter          String[]  @default([])   // e.g., ['high-value', 'priority']
-  employeesMinFilter  Int?                     // Minimum company size
-  employeesMaxFilter  Int?                     // Maximum company size
-  
-  // Target campaign
-  campaignId          String
-  campaign            Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-  
-  @@index([isActive, priority])
-  @@index([campaignId])
-}
-
-model CampaignEnrollment {
-  id                String           @id @default(uuid())
-  campaignId        String
-  campaign          Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  contactId         String
-  contact           Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  
-  status            EnrollmentStatus @default(ENROLLED)
-  enrolledAt        DateTime         @default(now())
-  stoppedAt         DateTime?
-  stoppedReason     String?
-  
-  externalId        String?
-  metadata          Json?
-  
-  @@unique([campaignId, contactId])
-  @@index([campaignId])
-  @@index([contactId])
-  @@index([status])
-  @@index([enrolledAt])
-}
-
-model Sequence {
-  id                String            @id @default(uuid())
-  name              String
-  description       String?
-  status            SequenceStatus    @default(DRAFT)
-  
-  channels          OutreachChannel[]
-  
-  settings          Json?
-  businessHoursOnly Boolean           @default(true)
-  respectTimezone   Boolean           @default(true)
-  excludeWeekends   Boolean           @default(true)
-  
-  totalEnrolled     Int               @default(0)
-  totalCompleted    Int               @default(0)
-  totalReplied      Int               @default(0)
-  totalBounced      Int               @default(0)
-  
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
-  
-  steps             SequenceStep[]
-  enrollments       SequenceEnrollment[]
-  
-  @@index([status])
-  @@index([createdAt])
-}
-
-model SequenceStep {
-  id                String              @id @default(uuid())
-  sequenceId        String
-  sequence          Sequence            @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
-  
-  order             Int
-  channel           OutreachChannel
-  
-  delayDays         Int                 @default(0)
-  delayHours        Int                 @default(0)
-  delayMinutes      Int                 @default(0)
-  
-  subject           String?
-  body              String              @db.Text
-  templateId        String?
-  
-  linkedinActionType LinkedInActionType?
-  
-  randomDelayMin    Int                 @default(0)
-  randomDelayMax    Int                 @default(30)
-  
-  variants          Json?
-  
-  totalSent         Int                 @default(0)
-  totalDelivered    Int                 @default(0)
-  totalOpened       Int                 @default(0)
-  totalClicked      Int                 @default(0)
-  totalReplied      Int                 @default(0)
-  totalBounced      Int                 @default(0)
-  
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-  
-  outreachSteps     OutreachStep[]
-  
-  @@unique([sequenceId, order])
-  @@index([sequenceId])
-  @@index([channel])
-}
-
-model SequenceEnrollment {
-  id                String        @id @default(uuid())
-  contactId         String
-  contact           Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  sequenceId        String
-  sequence          Sequence      @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
-  
-  currentStepOrder  Int           @default(0)
-  status            ContactStatus @default(IN_SEQUENCE)
-  
-  isPaused          Boolean       @default(false)
-  pausedAt          DateTime?
-  pauseReason       String?
-  
-  enrolledAt        DateTime      @default(now())
-  completedAt       DateTime?
-  lastStepAt        DateTime?
-  nextStepAt        DateTime?
-  
-  @@unique([contactId, sequenceId])
-  @@index([sequenceId])
-  @@index([status])
-  @@index([nextStepAt])
-  @@index([isPaused])
-}
-
-model OutreachStep {
-  id                String              @id @default(uuid())
-  contactId         String
-  contact           Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  sequenceStepId    String?
-  sequenceStep      SequenceStep?       @relation(fields: [sequenceStepId], references: [id], onDelete: SetNull)
-  
-  channel           OutreachChannel
-  status            OutreachStepStatus  @default(PENDING)
-  
-  scheduledAt       DateTime?
-  sentAt            DateTime?
-  deliveredAt       DateTime?
-  openedAt          DateTime?
-  clickedAt         DateTime?
-  repliedAt         DateTime?
-  bouncedAt         DateTime?
-  failedAt          DateTime?
-  
-  subject           String?
-  body              String?             @db.Text
-  
-  externalId        String?
-  messageId         String?
-  threadId          String?
-  
-  errorMessage      String?             @db.Text
-  errorCode         String?
-  retryCount        Int                 @default(0)
-  maxRetries        Int                 @default(3)
-  lastRetryAt       DateTime?
-  
-  metadata          Json?
-  
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-  
-  @@index([contactId])
-  @@index([status])
-  @@index([scheduledAt])
-  @@index([channel])
-  @@index([externalId])
-  @@index([sentAt])
-}
-
-model LinkedInAction {
-  id                  String                    @id @default(uuid())
-  contactId           String
-  contact             Contact                   @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  
-  actionType          LinkedInActionType
-  status              OutreachStepStatus        @default(PENDING)
-  connectionStatus    LinkedInConnectionStatus  @default(NOT_CONNECTED)
-  
-  scheduledAt         DateTime?
-  executedAt          DateTime?
-  
-  message             String?                   @db.Text
-  
-  phantomId           String?
-  phantomAgentId      String?
-  phantomOutput       Json?
-  
-  errorMessage        String?                   @db.Text
-  retryCount          Int                       @default(0)
-  maxRetries          Int                       @default(3)
-  
-  createdAt           DateTime                  @default(now())
-  updatedAt           DateTime                  @updatedAt
-  
-  @@index([contactId])
-  @@index([status])
-  @@index([scheduledAt])
-  @@index([actionType])
-}
-
-model Reply {
-  id              String          @id @default(uuid())
-  contactId       String
-  contact         Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  
-  channel         OutreachChannel
-  content         String?         @db.Text
-  subject         String?
-  
-  externalId      String?
-  messageId       String?
-  inReplyTo       String?
-  threadId        String?
-  
-  fromAddress     String?
-  receivedAt      DateTime
-  rawPayload      Json?
-  
-  isProcessed     Boolean         @default(false)
-  processedAt     DateTime?
-  
-  createdAt       DateTime        @default(now())
-  
-  @@index([contactId])
-  @@index([channel])
-  @@index([receivedAt])
-  @@index([isProcessed])
-  @@index([fromAddress])
-}
-
-model ActivityLog {
-  id              String          @id @default(uuid())
-  contactId       String?
-  contact         Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  
-  action          String
-  channel         OutreachChannel?
-  description     String?         @db.Text
-  metadata        Json?
-  
-  actorType       String          @default("system")
-  actorId         String?
-  
-  createdAt       DateTime        @default(now())
-  
-  @@index([contactId])
-  @@index([action])
-  @@index([createdAt])
-  @@index([actorType])
-}
-
-model SystemConfig {
-  id              String    @id @default(uuid())
-  key             String    @unique
-  value           Json
-  description     String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  
-  @@index([key])
-}
-
-model RateLimitLog {
-  id              String          @id @default(uuid())
-  channel         OutreachChannel
-  action          String
-  count           Int             @default(1)
-  windowStart     DateTime
-  windowEnd       DateTime
-  createdAt       DateTime        @default(now())
-  
-  @@index([channel, windowStart])
-  @@index([windowEnd])
-}
-
-model WebhookLog {
-  id              String    @id @default(uuid())
-  source          String
-  eventType       String
-  payload         Json
-  processed       Boolean   @default(false)
-  processedAt     DateTime?
-  errorMessage    String?   @db.Text
-  createdAt       DateTime  @default(now())
-  
-  @@index([source])
-  @@index([processed])
-  @@index([createdAt])
-}
-
 enum ImportJobStatus {
   PENDING
   PROCESSING
@@ -550,249 +677,7 @@ enum ImportJobType {
   SCRAPER
 }
 
-model ImportJob {
-  id                String          @id @default(uuid())
-  type              ImportJobType
-  status            ImportJobStatus @default(PENDING)
-  totalRecords      Int             @default(0)
-  processedRecords  Int             @default(0)
-  successCount      Int             @default(0)
-  duplicateCount    Int             @default(0)
-  invalidCount      Int             @default(0)
-  errorCount        Int             @default(0)
-  errors            Json?
-  metadata          Json?
-  createdAt         DateTime        @default(now())
-  startedAt         DateTime?
-  completedAt       DateTime?
-  updatedAt         DateTime        @updatedAt
-  
-  @@index([status])
-  @@index([createdAt])
-}
-
-// Phase 3.5 Day 7: Global Settings
-model Settings {
-  id                        String    @id @default(uuid())
-  
-  // Global LinkedIn Toggle
-  linkedinGloballyEnabled   Boolean   @default(true)
-  
-  // Day 8: Default campaign IDs for auto-enrollment
-  defaultEmailCampaignId    String?
-  defaultSmsCampaignId      String?
-  
-  // Scraper Configuration - Apify (Google Maps)
-  apifyQuery                String?   @default("HVAC companies")
-  apifyLocation             String?   @default("United States")
-  apifyMaxResults           Int       @default(50)
-  apifyMinRating            Float?    @default(0)
-  apifyRequirePhone         Boolean   @default(true)
-  apifyRequireWebsite       Boolean   @default(false)
-  apifySkipClosed           Boolean   @default(true)
-  
-  // Scraper Configuration - Apollo
-  apolloIndustry            String?   @default("HVAC")
-  apolloPersonTitles        String[]  @default(["Owner", "CEO", "President", "COO", "General Manager"])
-  apolloLocations           String[]  @default(["United States"])
-  apolloExcludeLocations    String[]  @default([])
-  apolloEmployeesMin        Int?
-  apolloEmployeesMax        Int?
-  apolloRevenueMin          Int?
-  apolloRevenueMax          Int?
-  apolloEnrichLimit         Int       @default(100)
-  
-  // Pipeline Control
-  pipelineEnabled           Boolean   @default(true)   // Master switch for entire pipeline
-  emailOutreachEnabled      Boolean   @default(true)   // Enable/disable email sending
-  smsOutreachEnabled        Boolean   @default(true)   // Enable/disable SMS sending
-  maintenanceMode           Boolean   @default(false)  // System in maintenance
-  maintenanceMessage        String?                    // Message to show during maintenance
-  
-  // Individual Job Controls
-  schedulerEnabled          Boolean   @default(true)   // Master switch for cron scheduler
-  scrapeJobEnabled          Boolean   @default(true)
-  apolloJobEnabled          Boolean   @default(true)   // Apollo scrape job (Track B)
-  enrichJobEnabled          Boolean   @default(true)
-  mergeJobEnabled           Boolean   @default(true)
-  validateJobEnabled        Boolean   @default(true)
-  enrollJobEnabled          Boolean   @default(true)
-  
-  // Cron Schedule Configuration
-  scheduleTemplate          String?   @default("balanced")  // balanced, aggressive, conservative, weekdays, nightOwl, realtime, custom
-  scrapeJobCron             String?   @default("0 6 * * *")      // Default: 6:00 AM daily
-  apolloJobCron             String?   @default("30 6 * * *")     // Default: 6:30 AM daily
-  enrichJobCron             String?   @default("0 8 * * *")      // Default: 8:00 AM daily
-  mergeJobCron              String?   @default("0 9 * * *")      // Default: 9:00 AM daily
-  validateJobCron           String?   @default("0 10 * * *")     // Default: 10:00 AM daily
-  enrollJobCron             String?   @default("0 11 * * *")     // Default: 11:00 AM daily
-  
-  // Emergency Stop Tracking
-  lastEmergencyStopAt       DateTime?
-  lastEmergencyStopBy       String?
-  
-  // Campaign Routing
-  routingFallbackBehavior   String    @default("default_campaign")  // "default_campaign" or "skip"
-  
-  // Metadata
-  createdAt                 DateTime  @default(now())
-  updatedAt                 DateTime  @updatedAt
-}
-
-// ==================== Message Templates ====================
-
 enum TemplateChannel {
   SMS
   EMAIL
-}
-
-model MessageTemplate {
-  id              String          @id @default(uuid())
-  name            String          // Display name: "HVAC Intro", "Solar Follow-up"
-  channel         TemplateChannel @default(SMS)
-  subject         String?         // For email templates
-  body            String          @db.Text // The message content with {{variables}}
-  description     String?         // Internal notes
-  isDefault       Boolean         @default(false) // Default template for auto-enroll
-  isActive        Boolean         @default(true)
-  
-  // Usage tracking
-  usageCount      Int             @default(0)
-  lastUsedAt      DateTime?
-  
-  // Metadata
-  variables       String[]        @default([]) // List of variables used: ["firstName", "company"]
-  tags            String[]        @default([])
-  
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  
-  @@index([channel])
-  @@index([isDefault])
-  @@index([isActive])
-}
-
-// ==================== Merge Audit Trail ====================
-
-model MergedContact {
-  id                  String    @id @default(uuid())
-  winnerContactId     String    // Contact that was kept
-  loserContactId      String    // Contact that was deleted
-  loserEmail          String    // Email of deleted contact for reference
-  
-  // Merge strategy metadata
-  mergeStrategy       String    // "most_complete", "data_quality", "most_recent"
-  winnerScore         Int?      // Completeness score of winner
-  loserScore          Int?      // Completeness score of loser
-  
-  // Data that was merged
-  fieldsMerged        Json?     // JSON object of fields that were copied from loser to winner
-  
-  // Related records moved
-  outreachStepsMoved  Int       @default(0)
-  repliesMoved        Int       @default(0)
-  activityLogsMoved   Int       @default(0)
-  enrollmentsDeleted  Int       @default(0)
-  
-  // Rollback data (snapshot of loser before deletion)
-  loserSnapshot       Json      // Full JSON snapshot of the deleted contact
-  
-  // Audit
-  mergedBy            String?   // "system" or user ID
-  mergedAt            DateTime  @default(now())
-  canRollback         Boolean   @default(true)
-  rolledBackAt        DateTime?
-  
-  @@index([winnerContactId])
-  @@index([loserContactId])
-  @@index([loserEmail])
-  @@index([mergedAt])
-}
-
-// ==================== Time-Series Metrics ====================
-
-model DailyMetrics {
-  id                      String    @id @default(uuid())
-  date                    DateTime  @unique @db.Date
-  
-  // Lead ingestion metrics
-  contactsImported        Int       @default(0)
-  contactsValidated       Int       @default(0)
-  contactsInvalid         Int       @default(0)
-  contactsDuplicate       Int       @default(0)
-  contactsMerged          Int       @default(0)
-  
-  // Outreach volume by channel
-  emailsSent              Int       @default(0)
-  emailsDelivered         Int       @default(0)
-  emailsOpened            Int       @default(0)
-  emailsClicked           Int       @default(0)
-  emailsBounced           Int       @default(0)
-  
-  smsSent                 Int       @default(0)
-  smsDelivered            Int       @default(0)
-  smsBounced              Int       @default(0)
-  
-  linkedinSent            Int       @default(0)
-  linkedinAccepted        Int       @default(0)
-  
-  // Reply metrics
-  repliesReceived         Int       @default(0)
-  repliesEmail            Int       @default(0)
-  repliesSms              Int       @default(0)
-  repliesLinkedin         Int       @default(0)
-  
-  // Campaign metrics
-  campaignsStarted        Int       @default(0)
-  campaignsStopped        Int       @default(0)
-  contactsEnrolled        Int       @default(0)
-  
-  // Calculated rates (stored for performance)
-  emailOpenRate           Float     @default(0)
-  emailReplyRate          Float     @default(0)
-  smsDeliveryRate         Float     @default(0)
-  smsReplyRate            Float     @default(0)
-  linkedinAcceptRate      Float     @default(0)
-  overallReplyRate        Float     @default(0)
-  
-  // Job execution tracking
-  scrapeJobRan            Boolean   @default(false)
-  enrichJobRan            Boolean   @default(false)
-  mergeJobRan             Boolean   @default(false)
-  validateJobRan          Boolean   @default(false)
-  enrollJobRan            Boolean   @default(false)
-  apolloJobRan            Boolean   @default(false)
-  
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
-  
-  @@index([date])
-  @@index([createdAt])
-}
-
-// ==================== Apollo Credit Tracking ====================
-
-model ApolloCreditUsage {
-  id                String    @id @default(uuid())
-  month             String    @unique // Format: "2026-01" for January 2026
-  creditsUsed       Int       @default(0)
-  creditsLimit      Int       @default(2000) // Monthly limit
-  
-  // Detailed tracking
-  searchCredits     Int       @default(0) // Free searches don't count
-  enrichCredits     Int       @default(0) // Paid enrichment credits
-  mobileCredits     Int       @default(0) // Mobile phone request credits
-  
-  // Job executions
-  jobExecutions     Int       @default(0)
-  lastJobAt         DateTime?
-  
-  // Alert tracking
-  limitWarningAt    DateTime? // When we hit 80% of limit
-  limitReachedAt    DateTime? // When we hit 100% of limit
-  
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  
-  @@index([month])
 }

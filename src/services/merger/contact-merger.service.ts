@@ -265,7 +265,7 @@ export class ContactMergerService {
         customFields: mergedData.customFields as any,
         enrichmentData: mergedData.enrichmentData as any,
         dataSources: combinedSources,
-        dataQuality: Math.max(target.dataQuality, source.dataQuality),
+        dataQuality: Math.max(target.dataQuality ?? 0, source.dataQuality ?? 0),
       },
     });
 

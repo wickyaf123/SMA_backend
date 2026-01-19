@@ -28,102 +28,39 @@ export interface ApolloJobResult {
   skippedDueToLimit: boolean;
 }
 
-/**
- * Industry-specific Apollo search configurations
- * 
- * IMPORTANT: Apollo API uses q_organization_keyword_tags for industry-specific filtering
- * These are keyword tags that match company descriptions and industry classifications
- */
-const INDUSTRY_CONFIGS = {
-  solar: {
-    name: 'Solar Contractors',
-    // Keyword tags for industry filtering (Apollo's q_organization_keyword_tags)
-    keywordTags: [
-      'solar',
-      'solar energy',
-      'solar installation',
-      'solar contractor',
-      'photovoltaic',
-      'renewable energy',
-      'solar panel',
-    ],
-    // Negative keywords to exclude (wholesalers, manufacturers, etc.)
-    excludeKeywordTags: [
-      'wholesale',
-      'distribution',
-      'distributor', 
-      'manufacturer',
-      'manufacturing',
-      'supply chain',
-    ],
-    locations: ['California, United States', 'Texas, United States', 'Florida, United States', 'Arizona, United States', 'North Carolina, United States'],
-    employeesMin: 10,
-    employeesMax: 100,
-    revenueMin: 1000000, // $1M
-    revenueMax: 10000000, // $10M
-  },
-  hvac: {
-    name: 'HVAC Contractors',
-    keywordTags: [
-      'hvac',
-      'heating and cooling',
-      'air conditioning',
-      'hvac contractor',
-      'hvac services',
-      'heating ventilation',
-      'ac repair',
-      'furnace',
-    ],
-    excludeKeywordTags: [
-      'wholesale',
-      'supply',
-      'distributor',
-      'manufacturer',
-      'manufacturing',
-    ],
-    locations: ['Texas, United States', 'Arizona, United States', 'Florida, United States', 'California, United States', 'North Carolina, United States', 'Georgia, United States'],
-    employeesMin: 10,
-    employeesMax: 100,
-    revenueMin: 1000000,
-    revenueMax: 10000000,
-  },
-  roofing: {
-    name: 'Roofing Contractors',
-    keywordTags: [
-      'roofing',
-      'roofing contractor',
-      'roof repair',
-      'roof installation',
-      'residential roofing',
-      'commercial roofing',
-      'roofer',
-    ],
-    excludeKeywordTags: [
-      'supply',
-      'wholesale', 
-      'distributor',
-      'manufacturer',
-      'manufacturing',
-    ],
-    locations: ['Texas, United States', 'Florida, United States', 'California, United States', 'North Carolina, United States', 'Georgia, United States', 'Arizona, United States'],
-    employeesMin: 10,
-    employeesMax: 100,
-    revenueMin: 1000000,
-    revenueMax: 10000000,
-  },
-};
+// INDUSTRY_CONFIGS removed - now using settings from database
 
 export class ApolloScrapeJob {
   /**
-   * Run Apollo scrape for one or all industries
+   * Run Apollo scrape using settings from database
    */
   async run(config: ApolloJobConfig = {}): Promise<ApolloJobResult> {
     const startTime = Date.now();
-    const industry = config.industry || 'all';
-
-    logger.info({ industry, config }, 'Starting Apollo scrape job');
 
     try {
+      // Check if configured
+      const isConfigured = await settingsService.isApolloConfigured();
+      if (!isConfigured) {
+        logger.warn('Apollo scraper not configured. Skipping job.');
+        return {
+          success: false,
+          industry: 'none',
+          totalSearched: 0,
+          totalEnriched: 0,
+          creditsUsed: 0,
+          creditsRemaining: 0,
+          errors: ['Apollo scraper is not configured. Please configure industry, locations, person titles, and search keywords in Settings.'],
+          duration: Date.now() - startTime,
+          skippedDueToLimit: false,
+        };
+      }
+
+      // Get Apollo settings from database
+      const apolloSettings = await settingsService.getApolloSettings();
+      const industry = apolloSettings.industry;
+
+      logger.info({ industry, config }, 'Starting Apollo scrape job with settings from database');
+
       // Check credit limit (unless explicitly skipped)
       if (!config.skipCreditCheck) {
         const canRun = await apolloCreditService.canRunJob();
@@ -151,45 +88,31 @@ export class ApolloScrapeJob {
         }
       }
 
-      // Get Apollo settings from database
-      const settings = await settingsService.getSettings();
-      const enrichLimit = config.enrichLimit || settings.apolloEnrichLimit || 100;
-
-      // Run for specific industry or all industries
-      const industriesToRun = industry === 'all' 
-        ? ['solar', 'hvac', 'roofing'] as const
-        : [industry] as const;
+      const enrichLimit = config.enrichLimit || apolloSettings.enrichLimit;
 
       let totalEnriched = 0;
       let totalSearched = 0;
       let totalCreditsUsed = 0;
       const errors: string[] = [];
 
-      for (const ind of industriesToRun) {
-        try {
-          const result = await this.runIndustry(ind, enrichLimit);
-          totalEnriched += result.enriched;
-          totalSearched += result.searched;
-          totalCreditsUsed += result.creditsUsed;
+      try {
+        const result = await this.runWithSettings(apolloSettings, enrichLimit);
+        totalEnriched += result.enriched;
+        totalSearched += result.searched;
+        totalCreditsUsed += result.creditsUsed;
 
-          logger.info(
-            { 
-              industry: ind, 
-              enriched: result.enriched, 
-              searched: result.searched,
-              creditsUsed: result.creditsUsed,
-            },
-            'Industry scrape completed'
-          );
-        } catch (error: any) {
-          logger.error({ industry: ind, error: error.message }, 'Industry scrape failed');
-          errors.push(`${ind}: ${error.message}`);
-        }
-
-        // Small delay between industries to respect rate limits
-        if (industriesToRun.length > 1) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
+        logger.info(
+          { 
+            industry, 
+            enriched: result.enriched, 
+            searched: result.searched,
+            creditsUsed: result.creditsUsed,
+          },
+          'Apollo scrape completed'
+        );
+      } catch (error: any) {
+        logger.error({ industry, error: error.message }, 'Apollo scrape failed');
+        errors.push(`${industry}: ${error.message}`);
       }
 
       // Update credit usage
@@ -240,60 +163,61 @@ export class ApolloScrapeJob {
   }
 
   /**
-   * Run Apollo search for a specific industry
+   * Run Apollo search using settings
    */
-  private async runIndustry(
-    industry: 'solar' | 'hvac' | 'roofing',
+  private async runWithSettings(
+    apolloSettings: any,
     enrichLimit: number
   ): Promise<{ searched: number; enriched: number; creditsUsed: number }> {
-    const config = INDUSTRY_CONFIGS[industry];
-
     logger.info(
       { 
-        industry: config.name, 
-        keywordTags: config.keywordTags,
-        excludeKeywordTags: config.excludeKeywordTags,
-        locations: config.locations,
+        industry: apolloSettings.industry, 
+        searchKeywords: apolloSettings.searchKeywords,
+        organizationKeywordTags: apolloSettings.organizationKeywordTags,
+        negativeKeywordTags: apolloSettings.negativeKeywordTags,
+        locations: apolloSettings.locations,
         enrichLimit,
+        enrichPhones: apolloSettings.enrichPhones,
       },
-      'Running Apollo search for industry'
+      'Running Apollo search with settings from database'
     );
 
-    // Build Apollo search parameters using CORRECT Apollo API fields
+    // Build Apollo search parameters from settings
     const searchParams: ApolloSearchParams = {
-      // INDUSTRY TARGETING: Use q_organization_keyword_tags for contractor-specific filtering
-      // This searches company descriptions and industry classifications
-      q_organization_keyword_tags: config.keywordTags,
+      // Use configured keywords from settings
+      q_organization_keywords: apolloSettings.searchKeywords,
+      q_organization_keyword_tags: apolloSettings.organizationKeywordTags,
+      q_organization_not_keyword_tags: apolloSettings.negativeKeywordTags,
       
-      // NEGATIVE FILTERING: Exclude wholesalers, distributors, manufacturers
-      q_organization_not_keyword_tags: config.excludeKeywordTags,
+      // Geography from settings
+      organization_locations: apolloSettings.locations,
       
-      // GEOGRAPHY: Filter by company/person location
-      organization_locations: config.locations,
+      // Company size from settings
+      organization_num_employees_ranges: apolloSettings.employeesMin && apolloSettings.employeesMax
+        ? [`${apolloSettings.employeesMin},${apolloSettings.employeesMax}`]
+        : undefined,
       
-      // COMPANY SIZE: 10-100 employees (small to mid-size contractors)
-      organization_num_employees_ranges: [`${config.employeesMin},${config.employeesMax}`],
+      // Revenue from settings
+      revenue_range: apolloSettings.revenueMin && apolloSettings.revenueMax
+        ? { min: apolloSettings.revenueMin, max: apolloSettings.revenueMax }
+        : undefined,
       
-      // REVENUE: $1M - $10M (established but not enterprise)
-      revenue_range: {
-        min: config.revenueMin,
-        max: config.revenueMax,
-      },
+      // Decision makers from settings
+      person_titles: apolloSettings.personTitles,
       
-      // DECISION MAKERS: Owners, executives, and managers
-      person_titles: [
-        'Owner',
-        'CEO',
-        'President',
-        'COO',
-        'General Manager',
-        'Vice President Operations',
-        'VP Operations',
-        'Operations Manager',
-      ],
+      // Optional filters from settings
+      person_locations: apolloSettings.personLocations,
+      person_seniorities: apolloSettings.personSeniorities,
+      organization_technologies: apolloSettings.technologies,
+      organization_industry_tag_ids: apolloSettings.industryTagIds,
+      organization_employee_growth_rate: apolloSettings.employeeGrowthRate,
       
-      // Pagination
-      per_page: 100,
+      // Pagination from settings
+      per_page: apolloSettings.perPage,
+      page: apolloSettings.page,
+      
+      // Phone enrichment from settings
+      reveal_phone_number: apolloSettings.enrichPhones,
     };
 
     // Import from Apollo (auto-enrichment workflow)
@@ -304,14 +228,14 @@ export class ApolloScrapeJob {
 
     logger.info(
       {
-        industry: config.name,
+        industry: apolloSettings.industry,
         jobId: result.jobId,
         total: result.total,
         imported: result.imported,
         duplicates: result.duplicates,
         invalid: result.invalid,
       },
-      'Apollo import completed for industry'
+      'Apollo import completed'
     );
 
     return {

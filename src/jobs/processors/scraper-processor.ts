@@ -170,6 +170,7 @@ async function processApolloScrape(
     person_titles: apolloSettings.personTitles,
     person_locations: apolloSettings.locations,
     per_page: Math.min(enrichLimit, 100),
+    reveal_phone_number: apolloSettings.enrichPhones,
   };
 
   // Run Apollo import

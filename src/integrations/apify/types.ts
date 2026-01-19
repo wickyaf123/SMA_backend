@@ -193,6 +193,19 @@ export interface NormalizedApifyContact {
   rating?: number;
   reviewCount?: number;
   
+  // Extended data fields
+  socialProfiles?: Record<string, string>;
+  reviews?: Array<{
+    name: string;
+    text: string;
+    stars: number;
+    publishedAtDate: string;
+  }>;
+  openingHours?: Array<{
+    day: string;
+    hours: string;
+  }>;
+  
   // Metadata
   dataSource: 'GOOGLE_MAPS';
   scrapedAt: Date;

@@ -16,15 +16,26 @@ export interface Settings {
   linkedinGloballyEnabled: boolean;
   defaultEmailCampaignId: string | null;
   defaultSmsCampaignId: string | null;
-  // Apify (Google Maps) Scraper Settings
+  // Apify (Google Maps) Scraper Settings - Expanded
   apifyQuery: string | null;
   apifyLocation: string | null;
-  apifyMaxResults: number;
+  apifySearchTerms: string[];
+  apifyLocations: string[];
+  apifyIndustries: string[];
+  apifyMaxResults: number | null;
   apifyMinRating: number | null;
-  apifyRequirePhone: boolean;
-  apifyRequireWebsite: boolean;
-  apifySkipClosed: boolean;
-  // Apollo Scraper Settings
+  apifyRequirePhone: boolean | null;
+  apifyRequireWebsite: boolean | null;
+  apifySkipClosed: boolean | null;
+  apifyLanguage: string | null;
+  apifySearchMatching: string | null;
+  apifyScrapePlaceDetails: boolean | null;
+  apifyScrapeContacts: boolean | null;
+  apifyScrapeReviews: boolean | null;
+  apifyMaxReviews: number | null;
+  apifyScrapeSocialMedia: any | null;
+  apifyMinReviewCount: number | null;
+  // Apollo Scraper Settings - Expanded
   apolloIndustry: string | null;
   apolloPersonTitles: string[];
   apolloLocations: string[];
@@ -33,21 +44,33 @@ export interface Settings {
   apolloEmployeesMax: number | null;
   apolloRevenueMin: number | null;
   apolloRevenueMax: number | null;
-  apolloEnrichLimit: number;
+  apolloEnrichLimit: number | null;
+  apolloEnrichPhones: boolean;
+  apolloSearchKeywords: string | null;
+  apolloPersonLocations: string[];
+  apolloPersonSeniorities: string[];
+  apolloOrganizationKeywordTags: string[];
+  apolloNegativeKeywordTags: string[];
+  apolloTechnologies: string[];
+  apolloIndustryTagIds: string[];
+  apolloEmployeeGrowthRate: string | null;
+  apolloFundingStage: string | null;
+  apolloPage: number | null;
+  apolloPerPage: number | null;
   // Pipeline Control
-  pipelineEnabled: boolean;
-  emailOutreachEnabled: boolean;
-  smsOutreachEnabled: boolean;
-  maintenanceMode: boolean;
+  pipelineEnabled: boolean | null;
+  emailOutreachEnabled: boolean | null;
+  smsOutreachEnabled: boolean | null;
+  maintenanceMode: boolean | null;
   maintenanceMessage: string | null;
   // Job Controls
-  schedulerEnabled: boolean;
-  scrapeJobEnabled: boolean;
-  apolloJobEnabled: boolean;
-  enrichJobEnabled: boolean;
-  mergeJobEnabled: boolean;
-  validateJobEnabled: boolean;
-  enrollJobEnabled: boolean;
+  schedulerEnabled: boolean | null;
+  scrapeJobEnabled: boolean | null;
+  apolloJobEnabled: boolean | null;
+  enrichJobEnabled: boolean | null;
+  mergeJobEnabled: boolean | null;
+  validateJobEnabled: boolean | null;
+  enrollJobEnabled: boolean | null;
   // Cron Schedules
   scheduleTemplate: string | null;
   scrapeJobCron: string | null;
@@ -60,7 +83,7 @@ export interface Settings {
   lastEmergencyStopAt: Date | null;
   lastEmergencyStopBy: string | null;
   // Campaign Routing
-  routingFallbackBehavior: string;
+  routingFallbackBehavior: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -116,13 +139,22 @@ export interface UpdateSettingsData {
 }
 
 export interface ApifyScraperSettings {
-  query: string;
-  location: string;
+  searchTerms: string[];
+  locations: string[];
+  industries: string[];
   maxResults: number;
   minRating: number;
   requirePhone: boolean;
   requireWebsite: boolean;
   skipClosed: boolean;
+  language?: string;
+  searchMatching?: 'all' | 'exact';
+  scrapePlaceDetails?: boolean;
+  scrapeContacts?: boolean;
+  scrapeReviews?: boolean;
+  maxReviews?: number;
+  scrapeSocialMedia?: any;
+  minReviewCount?: number;
 }
 
 export interface ApolloScraperSettings {
@@ -135,6 +167,18 @@ export interface ApolloScraperSettings {
   revenueMin: number | null;
   revenueMax: number | null;
   enrichLimit: number;
+  enrichPhones: boolean;
+  searchKeywords?: string;
+  personLocations?: string[];
+  personSeniorities?: string[];
+  organizationKeywordTags?: string[];
+  negativeKeywordTags?: string[];
+  technologies?: string[];
+  industryTagIds?: string[];
+  employeeGrowthRate?: string;
+  fundingStage?: string;
+  page?: number;
+  perPage?: number;
 }
 
 export class SettingsService {
@@ -323,18 +367,76 @@ export class SettingsService {
   // ==================== SCRAPER CONFIGURATION ====================
 
   /**
+   * Check if Apify (Google Maps) scraper is configured
+   */
+  async isApifyConfigured(): Promise<boolean> {
+    const settings = await this.getSettings();
+    return !!(
+      settings.apifySearchTerms && settings.apifySearchTerms.length > 0 &&
+      settings.apifyLocations && settings.apifyLocations.length > 0 &&
+      settings.apifyIndustries && settings.apifyIndustries.length > 0 &&
+      settings.apifyMaxResults
+    );
+  }
+
+  /**
    * Get Apify (Google Maps) scraper settings
+   * Throws error if not properly configured
    */
   async getApifySettings(): Promise<ApifyScraperSettings> {
     const settings = await this.getSettings();
+    
+    // Validate required fields
+    if (!settings.apifySearchTerms || settings.apifySearchTerms.length === 0) {
+      throw new AppError(
+        'Google Maps scraper not configured: Search terms are required',
+        400,
+        'APIFY_NOT_CONFIGURED'
+      );
+    }
+    
+    if (!settings.apifyLocations || settings.apifyLocations.length === 0) {
+      throw new AppError(
+        'Google Maps scraper not configured: Locations are required',
+        400,
+        'APIFY_NOT_CONFIGURED'
+      );
+    }
+    
+    if (!settings.apifyIndustries || settings.apifyIndustries.length === 0) {
+      throw new AppError(
+        'Google Maps scraper not configured: Industries are required',
+        400,
+        'APIFY_NOT_CONFIGURED'
+      );
+    }
+
+    if (!settings.apifyMaxResults) {
+      throw new AppError(
+        'Google Maps scraper not configured: Max results is required',
+        400,
+        'APIFY_NOT_CONFIGURED'
+      );
+    }
+    
+    // Return all settings
     return {
-      query: settings.apifyQuery || 'HVAC companies',
-      location: settings.apifyLocation || 'United States',
+      searchTerms: settings.apifySearchTerms,
+      locations: settings.apifyLocations,
+      industries: settings.apifyIndustries,
       maxResults: settings.apifyMaxResults,
-      minRating: settings.apifyMinRating || 0,
-      requirePhone: settings.apifyRequirePhone,
-      requireWebsite: settings.apifyRequireWebsite,
-      skipClosed: settings.apifySkipClosed,
+      minRating: settings.apifyMinRating ?? 0,
+      requirePhone: settings.apifyRequirePhone ?? false,
+      requireWebsite: settings.apifyRequireWebsite ?? false,
+      skipClosed: settings.apifySkipClosed ?? true,
+      language: settings.apifyLanguage ?? undefined,
+      searchMatching: settings.apifySearchMatching as 'all' | 'exact' | undefined,
+      scrapePlaceDetails: settings.apifyScrapePlaceDetails ?? undefined,
+      scrapeContacts: settings.apifyScrapeContacts ?? undefined,
+      scrapeReviews: settings.apifyScrapeReviews ?? undefined,
+      maxReviews: settings.apifyMaxReviews ?? undefined,
+      scrapeSocialMedia: settings.apifyScrapeSocialMedia ?? undefined,
+      minReviewCount: settings.apifyMinReviewCount ?? undefined,
     };
   }
 
@@ -350,13 +452,22 @@ export class SettingsService {
       await prisma.settings.update({
         where: { id: DEFAULT_SETTINGS_ID },
         data: {
-          apifyQuery: data.query,
-          apifyLocation: data.location,
+          apifySearchTerms: data.searchTerms,
+          apifyLocations: data.locations,
+          apifyIndustries: data.industries,
           apifyMaxResults: data.maxResults,
           apifyMinRating: data.minRating,
           apifyRequirePhone: data.requirePhone,
           apifyRequireWebsite: data.requireWebsite,
           apifySkipClosed: data.skipClosed,
+          apifyLanguage: data.language,
+          apifySearchMatching: data.searchMatching,
+          apifyScrapePlaceDetails: data.scrapePlaceDetails,
+          apifyScrapeContacts: data.scrapeContacts,
+          apifyScrapeReviews: data.scrapeReviews,
+          apifyMaxReviews: data.maxReviews,
+          apifyScrapeSocialMedia: data.scrapeSocialMedia,
+          apifyMinReviewCount: data.minReviewCount,
           updatedAt: new Date(),
         },
       });
@@ -364,26 +475,73 @@ export class SettingsService {
       logger.info('Apify settings updated successfully');
       return this.getApifySettings();
     } catch (error) {
+      if (error instanceof AppError) throw error;
       logger.error({ error, data }, 'Failed to update Apify settings');
       throw new AppError('Failed to update Apify settings', 500, 'SETTINGS_UPDATE_ERROR');
     }
   }
 
   /**
+   * Check if Apollo scraper is configured
+   */
+  async isApolloConfigured(): Promise<boolean> {
+    const settings = await this.getSettings();
+    return !!(
+      settings.apolloIndustry &&
+      settings.apolloLocations && settings.apolloLocations.length > 0 &&
+      settings.apolloPersonTitles && settings.apolloPersonTitles.length > 0 &&
+      (settings.apolloSearchKeywords || settings.apolloOrganizationKeywordTags?.length > 0)
+    );
+  }
+
+  /**
    * Get Apollo scraper settings
+   * Throws error if not properly configured
    */
   async getApolloSettings(): Promise<ApolloScraperSettings> {
     const settings = await this.getSettings();
+    
+    // Validate required fields
+    const errors = [];
+    
+    if (!settings.apolloIndustry) errors.push('Industry');
+    if (!settings.apolloLocations || settings.apolloLocations.length === 0) errors.push('Locations');
+    if (!settings.apolloPersonTitles || settings.apolloPersonTitles.length === 0) errors.push('Person Titles');
+    if (!settings.apolloSearchKeywords && 
+        (!settings.apolloOrganizationKeywordTags || settings.apolloOrganizationKeywordTags.length === 0)) {
+      errors.push('Search Keywords or Organization Keyword Tags');
+    }
+    
+    if (errors.length > 0) {
+      throw new AppError(
+        `Apollo scraper not configured. Missing: ${errors.join(', ')}`,
+        400,
+        'APOLLO_NOT_CONFIGURED'
+      );
+    }
+    
     return {
-      industry: settings.apolloIndustry || 'HVAC',
-      personTitles: settings.apolloPersonTitles || ['Owner', 'CEO', 'President', 'COO', 'General Manager'],
-      locations: settings.apolloLocations || ['United States'],
+      industry: settings.apolloIndustry!,
+      personTitles: settings.apolloPersonTitles,
+      locations: settings.apolloLocations,
       excludeLocations: settings.apolloExcludeLocations || [],
       employeesMin: settings.apolloEmployeesMin,
       employeesMax: settings.apolloEmployeesMax,
       revenueMin: settings.apolloRevenueMin,
       revenueMax: settings.apolloRevenueMax,
-      enrichLimit: settings.apolloEnrichLimit,
+      enrichLimit: settings.apolloEnrichLimit ?? 100,
+      enrichPhones: settings.apolloEnrichPhones ?? true,
+      searchKeywords: settings.apolloSearchKeywords ?? undefined,
+      personLocations: settings.apolloPersonLocations || [],
+      personSeniorities: settings.apolloPersonSeniorities || [],
+      organizationKeywordTags: settings.apolloOrganizationKeywordTags || [],
+      negativeKeywordTags: settings.apolloNegativeKeywordTags || [],
+      technologies: settings.apolloTechnologies || [],
+      industryTagIds: settings.apolloIndustryTagIds || [],
+      employeeGrowthRate: settings.apolloEmployeeGrowthRate ?? undefined,
+      fundingStage: settings.apolloFundingStage ?? undefined,
+      page: settings.apolloPage ?? 1,
+      perPage: settings.apolloPerPage ?? 100,
     };
   }
 
@@ -408,6 +566,18 @@ export class SettingsService {
           apolloRevenueMin: data.revenueMin,
           apolloRevenueMax: data.revenueMax,
           apolloEnrichLimit: data.enrichLimit,
+          apolloEnrichPhones: data.enrichPhones,
+          apolloSearchKeywords: data.searchKeywords,
+          apolloPersonLocations: data.personLocations,
+          apolloPersonSeniorities: data.personSeniorities,
+          apolloOrganizationKeywordTags: data.organizationKeywordTags,
+          apolloNegativeKeywordTags: data.negativeKeywordTags,
+          apolloTechnologies: data.technologies,
+          apolloIndustryTagIds: data.industryTagIds,
+          apolloEmployeeGrowthRate: data.employeeGrowthRate,
+          apolloFundingStage: data.fundingStage,
+          apolloPage: data.page,
+          apolloPerPage: data.perPage,
           updatedAt: new Date(),
         },
       });
@@ -415,6 +585,7 @@ export class SettingsService {
       logger.info('Apollo settings updated successfully');
       return this.getApolloSettings();
     } catch (error) {
+      if (error instanceof AppError) throw error;
       logger.error({ error, data }, 'Failed to update Apollo settings');
       throw new AppError('Failed to update Apollo settings', 500, 'SETTINGS_UPDATE_ERROR');
     }
@@ -439,19 +610,19 @@ export class SettingsService {
   async getPipelineControls(): Promise<PipelineControlSettings> {
     const settings = await this.getSettings();
     return {
-      pipelineEnabled: settings.pipelineEnabled,
-      emailOutreachEnabled: settings.emailOutreachEnabled,
-      smsOutreachEnabled: settings.smsOutreachEnabled,
+      pipelineEnabled: settings.pipelineEnabled ?? true,
+      emailOutreachEnabled: settings.emailOutreachEnabled ?? true,
+      smsOutreachEnabled: settings.smsOutreachEnabled ?? true,
       linkedinGloballyEnabled: settings.linkedinGloballyEnabled,
-      maintenanceMode: settings.maintenanceMode,
+      maintenanceMode: settings.maintenanceMode ?? false,
       maintenanceMessage: settings.maintenanceMessage,
-      schedulerEnabled: settings.schedulerEnabled,
-      scrapeJobEnabled: settings.scrapeJobEnabled,
-      apolloJobEnabled: settings.apolloJobEnabled,
-      enrichJobEnabled: settings.enrichJobEnabled,
-      mergeJobEnabled: settings.mergeJobEnabled,
-      validateJobEnabled: settings.validateJobEnabled,
-      enrollJobEnabled: settings.enrollJobEnabled,
+      schedulerEnabled: settings.schedulerEnabled ?? true,
+      scrapeJobEnabled: settings.scrapeJobEnabled ?? true,
+      apolloJobEnabled: settings.apolloJobEnabled ?? true,
+      enrichJobEnabled: settings.enrichJobEnabled ?? true,
+      mergeJobEnabled: settings.mergeJobEnabled ?? true,
+      validateJobEnabled: settings.validateJobEnabled ?? true,
+      enrollJobEnabled: settings.enrollJobEnabled ?? true,
       lastEmergencyStopAt: settings.lastEmergencyStopAt,
       lastEmergencyStopBy: settings.lastEmergencyStopBy,
     };
@@ -692,17 +863,17 @@ export class SettingsService {
 
     switch (jobType) {
       case 'scrape':
-        return settings.scrapeJobEnabled;
+        return settings.scrapeJobEnabled ?? true;
       case 'apollo':
-        return settings.apolloJobEnabled;
+        return settings.apolloJobEnabled ?? true;
       case 'enrich':
-        return settings.enrichJobEnabled;
+        return settings.enrichJobEnabled ?? true;
       case 'merge':
-        return settings.mergeJobEnabled;
+        return settings.mergeJobEnabled ?? true;
       case 'validate':
-        return settings.validateJobEnabled;
+        return settings.validateJobEnabled ?? true;
       case 'enroll':
-        return settings.enrollJobEnabled;
+        return settings.enrollJobEnabled ?? true;
       default:
         return false;
     }
@@ -714,15 +885,15 @@ export class SettingsService {
   async isOutreachEnabled(channel: 'email' | 'sms' | 'linkedin'): Promise<boolean> {
     const settings = await this.getSettings();
     
-    if (!settings.pipelineEnabled) {
+    if (!(settings.pipelineEnabled ?? true)) {
       return false;
     }
 
     switch (channel) {
       case 'email':
-        return settings.emailOutreachEnabled;
+        return settings.emailOutreachEnabled ?? true;
       case 'sms':
-        return settings.smsOutreachEnabled;
+        return settings.smsOutreachEnabled ?? true;
       case 'linkedin':
         return settings.linkedinGloballyEnabled;
       default:

@@ -11,12 +11,9 @@ import { importJobService } from '../import/import-job.service';
 import { ImportJobType } from '@prisma/client';
 import { leadIngestionService } from '../lead/ingestion.service';
 import { prisma } from '../../config/database';
-import {
-  TARGET_METROS,
-  GOOGLE_MAPS_SEARCH_TERMS,
-  GOOGLE_MAPS_QUALITY_FILTERS,
-  shouldExcludeCompany,
-} from '../../integrations/contractor-constants';
+import { shouldExcludeCompany } from '../../integrations/contractor-constants';
+import { settingsService } from '../settings/settings.service';
+import { AppError } from '../../utils/errors';
 
 export interface GoogleMapsImportOptions {
   industry: 'SOLAR' | 'HVAC' | 'ROOFING';
@@ -136,16 +133,28 @@ export class GoogleMapsScraperService {
   async importContractorLeads(
     options: GoogleMapsImportOptions
   ): Promise<GoogleMapsImportResult> {
+    // Get settings - will throw if not configured
+    const scraperSettings = await settingsService.getApifySettings();
+    
+    // Use settings as source of truth (no fallback defaults)
     const {
       industry,
-      metros = TARGET_METROS,
-      searchTerms = GOOGLE_MAPS_SEARCH_TERMS[industry],
-      maxPerMetro = 100,
-      minReviews = GOOGLE_MAPS_QUALITY_FILTERS.minReviews,
-      minRating = GOOGLE_MAPS_QUALITY_FILTERS.minRating,
-      skipClosed = GOOGLE_MAPS_QUALITY_FILTERS.excludeClosed,
-      requireWebsite = false,
+      metros = scraperSettings.locations,
+      searchTerms = scraperSettings.searchTerms,
+      maxPerMetro = scraperSettings.maxResults,
+      minRating = scraperSettings.minRating,
+      skipClosed = scraperSettings.skipClosed,
+      requireWebsite = scraperSettings.requireWebsite,
     } = options;
+
+    // Validate that industry is one of configured industries
+    if (!scraperSettings.industries.includes(industry)) {
+      throw new AppError(
+        `Industry '${industry}' not configured. Configured industries: ${scraperSettings.industries.join(', ')}`,
+        400,
+        'INDUSTRY_NOT_CONFIGURED'
+      );
+    }
 
     // Create import job (cast needed due to Prisma type cache)
     const jobId = await importJobService.createJob(
@@ -199,9 +208,19 @@ export class GoogleMapsScraperService {
                 metro,
                 resultsPerTerm,
                 {
+                  // Basic filters
                   minRating,
                   requireWebsite,
                   skipClosed,
+                  
+                  // Extended scraping options
+                  language: scraperSettings.language,
+                  searchMatching: scraperSettings.searchMatching,
+                  scrapePlaceDetails: scraperSettings.scrapePlaceDetails,
+                  scrapeContacts: scraperSettings.scrapeContacts,
+                  scrapeReviews: scraperSettings.scrapeReviews,
+                  maxReviews: scraperSettings.maxReviews,
+                  scrapeSocialMedia: scraperSettings.scrapeSocialMedia as any,
                 }
               );
 
@@ -227,8 +246,8 @@ export class GoogleMapsScraperService {
 
           // Filter by quality criteria (on new businesses only)
           const qualityFiltered = newBusinesses.filter(business => {
-            // Check review count
-            if (business.reviewsCount && business.reviewsCount < minReviews) {
+            // Check review count (if configured)
+            if (scraperSettings.minReviewCount && business.reviewsCount && business.reviewsCount < scraperSettings.minReviewCount) {
               return false;
             }
 
@@ -292,6 +311,9 @@ export class GoogleMapsScraperService {
                     rating: normalized.rating,
                     reviewCount: normalized.reviewCount,
                     businessStatus: normalized.rawData.businessStatus,
+                    socialProfiles: normalized.socialProfiles, // NEW
+                    reviews: normalized.reviews, // NEW
+                    openingHours: normalized.openingHours, // NEW
                   },
                   company: {
                     name: normalized.businessName,
@@ -424,6 +446,9 @@ export class GoogleMapsScraperService {
     logger.info({ query, location, maxResults }, 'Scraping Google Maps by query and location');
 
     try {
+      // Get settings for extended options
+      const scraperSettings = await settingsService.getApifySettings();
+      
       // Run Apify scrape using production method
       const rawListings = await this.apifyClient.productionScrape(
         query,
@@ -433,6 +458,15 @@ export class GoogleMapsScraperService {
           minRating: options?.minRating,
           requireWebsite: options?.requireWebsite,
           skipClosed: options?.skipClosed ?? true,
+          
+          // Extended scraping options from settings
+          language: scraperSettings.language,
+          searchMatching: scraperSettings.searchMatching,
+          scrapePlaceDetails: scraperSettings.scrapePlaceDetails,
+          scrapeContacts: scraperSettings.scrapeContacts,
+          scrapeReviews: scraperSettings.scrapeReviews,
+          maxReviews: scraperSettings.maxReviews,
+          scrapeSocialMedia: scraperSettings.scrapeSocialMedia as any,
         }
       );
 
@@ -500,6 +534,9 @@ export class GoogleMapsScraperService {
           placeId: listing.placeId,
           rating: listing.rating,
           reviewCount: listing.reviewCount,
+          socialProfiles: listing.socialProfiles, // NEW
+          reviews: listing.reviews, // NEW
+          openingHours: listing.openingHours, // NEW
         },
         company: {
           name: listing.businessName,
@@ -566,14 +603,27 @@ export class GoogleMapsScraperService {
    */
   async quickTest(
     industry: 'SOLAR' | 'HVAC' | 'ROOFING',
-    metro: string = 'Austin, TX'
+    metro?: string
   ): Promise<ApifyBusinessListing[]> {
-    const searchTerms = GOOGLE_MAPS_SEARCH_TERMS[industry];
-    const searchTerm = searchTerms[0]; // Use first search term
+    // Get settings - will throw if not configured
+    const scraperSettings = await settingsService.getApifySettings();
+    
+    // Validate industry is configured
+    if (!scraperSettings.industries.includes(industry)) {
+      throw new AppError(
+        `Industry '${industry}' not configured. Configured industries: ${scraperSettings.industries.join(', ')}`,
+        400,
+        'INDUSTRY_NOT_CONFIGURED'
+      );
+    }
 
-    logger.info({ industry, metro, searchTerm }, 'Running quick test scrape');
+    // Use first search term and first location from settings
+    const searchTerm = scraperSettings.searchTerms[0];
+    const location = metro || scraperSettings.locations[0];
 
-    return this.apifyClient.quickScrape(searchTerm, metro);
+    logger.info({ industry, location, searchTerm }, 'Running quick test scrape');
+
+    return this.apifyClient.quickScrape(searchTerm, location);
   }
 
   /**

@@ -34,43 +34,46 @@ export interface ScrapeJobResult {
 export class ScrapeJob {
   /**
    * Run the scrape job
-   * If config.useSettings is true or no config provided, uses database settings
+   * Requires configuration from database settings
    */
   async run(config?: ScrapeJobConfig): Promise<ScrapeJobResult> {
     const startTime = Date.now();
-    let finalConfig: ScrapeJobConfig;
 
     try {
-      // Fetch settings from database if useSettings is true or no config provided
-      if (!config || config.useSettings) {
-        const apifySettings = await settingsService.getApifySettings();
-        finalConfig = {
-          query: config?.query || apifySettings.query,
-          maxResults: config?.maxResults || apifySettings.maxResults,
-          location: config?.location || apifySettings.location,
-          minRating: apifySettings.minRating,
-          requirePhone: apifySettings.requirePhone,
-          requireWebsite: apifySettings.requireWebsite,
-          skipClosed: apifySettings.skipClosed,
-        };
-        logger.info({ settings: finalConfig }, 'Using scraper settings from database');
-      } else {
-        finalConfig = {
-          query: config.query || 'HVAC companies',
-          maxResults: config.maxResults || 10,
-          location: config.location || 'United States',
-          minRating: config.minRating,
-          requirePhone: config.requirePhone,
-          requireWebsite: config.requireWebsite,
-          skipClosed: config.skipClosed,
+      // Check if configured
+      const isConfigured = await settingsService.isApifyConfigured();
+      if (!isConfigured) {
+        logger.warn('Google Maps scraper not configured. Skipping job.');
+        return {
+          success: false,
+          totalScraped: 0,
+          totalImported: 0,
+          errors: ['Google Maps scraper is not configured. Please configure search terms, locations, and industries in Settings.'],
+          duration: Date.now() - startTime,
         };
       }
 
-      logger.info({ config: finalConfig }, 'Starting scrape job');
+      // Fetch settings from database (no defaults)
+      const apifySettings = await settingsService.getApifySettings();
+      
+      // Use settings (throw error if missing, don't use fallback defaults)
+      const finalConfig = {
+        searchTerms: apifySettings.searchTerms,
+        locations: apifySettings.locations,
+        industries: apifySettings.industries,
+        maxResults: apifySettings.maxResults,
+        minRating: apifySettings.minRating,
+        requirePhone: apifySettings.requirePhone,
+        requireWebsite: apifySettings.requireWebsite,
+        skipClosed: apifySettings.skipClosed,
+      };
 
+      logger.info({ config: finalConfig }, 'Starting scrape job with settings from database');
+
+      // Use first search term and location for simple scrape
       const result = await scraperService.scrapeByIndustryAndLocation(
-        finalConfig.query!,
-        finalConfig.location || 'United States',
+        finalConfig.searchTerms[0],
+        finalConfig.locations[0],
         { 
           maxResults: finalConfig.maxResults,
           minRating: finalConfig.minRating,
