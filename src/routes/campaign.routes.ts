@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { campaignController } from '../controllers/campaign.controller';
+import { routingController } from '../controllers/routing.controller';
 import { validate } from '../middleware/validate';
 import {
   createCampaignSchema,
@@ -20,6 +21,55 @@ const router = Router();
  * Campaign Routes
  * All routes require authentication (handled by parent router)
  */
+
+// ==================== Routing Rules ====================
+// These must be before :id routes to avoid conflicts
+
+// Get filter options for UI dropdowns
+router.get(
+  '/routing-rules/filter-options',
+  routingController.getFilterOptions.bind(routingController)
+);
+
+// Reorder routing rules (bulk priority update)
+router.post(
+  '/routing-rules/reorder',
+  routingController.reorderRules.bind(routingController)
+);
+
+// Test routing for a contact
+router.post(
+  '/routing-rules/test',
+  routingController.testRouting.bind(routingController)
+);
+
+// Routing rules CRUD
+router.get(
+  '/routing-rules',
+  routingController.listRules.bind(routingController)
+);
+
+router.post(
+  '/routing-rules',
+  routingController.createRule.bind(routingController)
+);
+
+router.get(
+  '/routing-rules/:id',
+  routingController.getRule.bind(routingController)
+);
+
+router.put(
+  '/routing-rules/:id',
+  routingController.updateRule.bind(routingController)
+);
+
+router.delete(
+  '/routing-rules/:id',
+  routingController.deleteRule.bind(routingController)
+);
+
+// ==================== Campaign Sync & Stats ====================
 
 // Sync campaigns from external platforms (must be before :id routes)
 router.post(

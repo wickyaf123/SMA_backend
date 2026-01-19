@@ -19,7 +19,7 @@ import { cronToHuman } from '../config/schedule-templates';
 import { scraperQueue, campaignQueue, leadProcessingQueue } from './queues';
 import { realtimeEmitter } from '../services/realtime/event-emitter.service';
 
-type JobType = 'SCRAPE' | 'APOLLO_SCRAPE' | 'ENRICH' | 'MERGE' | 'VALIDATE' | 'AUTO_ENROLL';
+import type { JobType } from '../services/job-log.service';
 
 interface ScheduledJob {
   name: string;

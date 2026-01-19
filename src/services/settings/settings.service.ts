@@ -59,6 +59,8 @@ export interface Settings {
   // Emergency Stop
   lastEmergencyStopAt: Date | null;
   lastEmergencyStopBy: string | null;
+  // Campaign Routing
+  routingFallbackBehavior: string;
   createdAt: Date;
   updatedAt: Date;
 }

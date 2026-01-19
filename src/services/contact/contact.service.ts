@@ -1,6 +1,8 @@
 import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { ContactStatus, Prisma } from '@prisma/client';
+import { leadProcessingQueue } from '../../jobs/queues';
+import { deduplicationService } from '../lead/deduplication.service';
 
 /**
  * Paginated response
@@ -40,16 +42,53 @@ export interface ContactSearchFilters {
  */
 export class ContactService {
   /**
-   * Create a new contact
+   * Create a new contact with background validation
+   * 
+   * Flow:
+   * 1. Check for duplicates (fast, synchronous)
+   * 2. Save contact immediately with status NEW, validation PENDING
+   * 3. Queue background job for email/phone validation
+   * 4. Create activity log
+   * 5. Return contact with validation job ID for tracking
    */
   public async createContact(data: any): Promise<any> {
     try {
-      logger.info({ email: data.email }, 'Creating contact');
+      logger.info({ email: data.email }, 'Creating contact with background validation');
 
+      // 1. Quick duplicate check (synchronous)
+      if (data.email) {
+        const dupCheck = await deduplicationService.checkDuplicate(data.email);
+        if (dupCheck.isDuplicate) {
+          throw new Error(`Contact with email ${data.email} already exists`);
+        }
+      }
+
+      // 2. Build fullName if not provided
+      const fullName = data.fullName || 
+        [data.firstName, data.lastName].filter(Boolean).join(' ') || 
+        null;
+
+      // 3. Create contact immediately with PENDING validation status
       const contact = await prisma.contact.create({
         data: {
-          ...data,
-          status: data.status || ContactStatus.NEW,
+          email: data.email,
+          firstName: data.firstName,
+          lastName: data.lastName,
+          fullName,
+          title: data.title,
+          phone: data.phone,
+          phoneFormatted: data.phone,
+          linkedinUrl: data.linkedinUrl,
+          city: data.city,
+          state: data.state,
+          country: data.country,
+          companyId: data.companyId,
+          status: ContactStatus.NEW,
+          emailValidationStatus: data.email ? 'PENDING' : 'PENDING',
+          phoneValidationStatus: data.phone ? 'PENDING' : 'PENDING',
+          source: 'manual',
+          tags: data.tags || [],
+          customFields: data.customFields || {},
         },
         include: {
           company: true,
@@ -59,9 +98,62 @@ export class ContactService {
       logger.info({
         contactId: contact.id,
         email: contact.email,
-      }, 'Contact created');
+      }, 'Contact created, queuing validation job');
 
-      return contact;
+      // 4. Queue background validation job
+      let validationJobId: string | null = null;
+      if (data.email || data.phone) {
+        const job = await leadProcessingQueue.add(
+          'validate-manual-contact',
+          {
+            type: 'full-pipeline',
+            contactId: contact.id,
+            options: {
+              validateEmail: !!data.email,
+              validatePhone: !!data.phone,
+              enrichWithHunter: true,
+              checkDuplicates: false, // Already checked above
+            },
+          },
+          {
+            priority: 1, // High priority for user-initiated actions
+            attempts: 3,
+            backoff: {
+              type: 'exponential',
+              delay: 2000,
+            },
+          }
+        );
+        validationJobId = job.id || null;
+
+        logger.info({
+          contactId: contact.id,
+          jobId: validationJobId,
+        }, 'Validation job queued');
+      }
+
+      // 5. Create activity log
+      await prisma.activityLog.create({
+        data: {
+          contactId: contact.id,
+          action: 'CONTACT_CREATED',
+          description: 'Contact added manually - validation in progress',
+          actorType: 'USER',
+          metadata: {
+            source: 'manual',
+            validationJobId,
+            hasEmail: !!data.email,
+            hasPhone: !!data.phone,
+          },
+        },
+      });
+
+      // Return contact with validation job info
+      return {
+        ...contact,
+        _validationJobId: validationJobId,
+        _validationStatus: 'processing',
+      };
     } catch (error: any) {
       if (error.code === 'P2002' && error.meta?.target?.includes('email')) {
         throw new Error(`Contact with email ${data.email} already exists`);
@@ -252,6 +344,26 @@ export class ContactService {
         where,
         include: {
           company: true,
+          campaignEnrollments: {
+            include: {
+              campaign: {
+                select: {
+                  id: true,
+                  name: true,
+                  channel: true,
+                  status: true,
+                },
+              },
+            },
+            orderBy: {
+              enrolledAt: 'desc',
+            },
+          },
+          _count: {
+            select: {
+              replies: true,
+            },
+          },
         },
         orderBy: {
           [sort]: order,

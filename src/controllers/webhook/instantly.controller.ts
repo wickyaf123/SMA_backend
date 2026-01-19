@@ -22,13 +22,19 @@ export class InstantlyWebhookController {
     next: NextFunction
   ): Promise<void> {
     try {
+      // Instantly sends a FLAT payload (not nested in 'data')
       const payload = req.body as InstantlyWebhookPayload;
+      
+      // Use lead_email or email field
+      const contactEmail = payload.lead_email || payload.email;
+      const eventType = payload.event_type;
+      const campaignId = payload.campaign_id || payload.campaign;
 
       logger.info(
         {
-          event: payload.event,
-          email: payload.data?.email,
-          campaignId: payload.data?.campaign_id,
+          event: eventType,
+          email: contactEmail,
+          campaignId: campaignId,
         },
         'Received Instantly webhook'
       );
@@ -37,7 +43,7 @@ export class InstantlyWebhookController {
       await prisma.webhookLog.create({
         data: {
           source: 'instantly',
-          eventType: payload.event,
+          eventType: eventType || 'unknown',
           payload: payload as any,
           processed: false,
         },
@@ -45,12 +51,12 @@ export class InstantlyWebhookController {
 
       // Find contact by email
       const contact = await prisma.contact.findUnique({
-        where: { email: payload.data.email },
+        where: { email: contactEmail },
       });
 
       if (!contact) {
         logger.warn(
-          { email: payload.data.email },
+          { email: contactEmail },
           'Contact not found for Instantly webhook'
         );
         sendSuccess(res, { received: true, processed: false });
@@ -62,7 +68,7 @@ export class InstantlyWebhookController {
         where: {
           contactId: contact.id,
           campaign: {
-            instantlyCampaignId: payload.data.campaign_id,
+            instantlyCampaignId: campaignId,
           },
         },
         include: {
@@ -74,7 +80,7 @@ export class InstantlyWebhookController {
         logger.warn(
           {
             contactId: contact.id,
-            campaignId: payload.data.campaign_id,
+            campaignId: campaignId,
           },
           'Enrollment not found for Instantly webhook'
         );
@@ -82,18 +88,18 @@ export class InstantlyWebhookController {
         return;
       }
 
-      // Process event
-      await this.processEvent(payload.event, enrollment, contact, payload.data);
+      // Process event - pass the flat payload directly
+      await this.processEvent(eventType, enrollment, contact, payload);
 
       // Mark webhook as processed
       await prisma.webhookLog.updateMany({
         where: {
           source: 'instantly',
-          eventType: payload.event,
+          eventType: eventType,
           processed: false,
           payload: {
-            path: ['data', 'email'],
-            equals: payload.data.email,
+            path: ['email'],
+            equals: contactEmail,
           },
         },
         data: {
@@ -122,7 +128,7 @@ export class InstantlyWebhookController {
     let updateContact = false;
 
     switch (event) {
-      case 'email.sent':
+      case 'email_sent':
         newStatus = 'SENT';
         logger.info(
           { contactId: contact.id, enrollmentId: enrollment.id },
@@ -130,7 +136,7 @@ export class InstantlyWebhookController {
         );
         break;
 
-      case 'email.delivered':
+      case 'email_delivered':
         // Keep SENT status, just log
         logger.info(
           { contactId: contact.id, enrollmentId: enrollment.id },
@@ -138,7 +144,7 @@ export class InstantlyWebhookController {
         );
         break;
 
-      case 'email.opened':
+      case 'email_opened':
         newStatus = 'OPENED';
         logger.info(
           { contactId: contact.id, enrollmentId: enrollment.id },
@@ -146,7 +152,7 @@ export class InstantlyWebhookController {
         );
         break;
 
-      case 'email.clicked':
+      case 'email_clicked':
         newStatus = 'CLICKED';
         logger.info(
           { contactId: contact.id, enrollmentId: enrollment.id },
@@ -154,7 +160,7 @@ export class InstantlyWebhookController {
         );
         break;
 
-      case 'email.replied':
+      case 'email_replied':
         newStatus = 'REPLIED';
         updateContact = true;
 
@@ -238,7 +244,7 @@ export class InstantlyWebhookController {
 
         break;
 
-      case 'email.bounced':
+      case 'email_bounced':
         newStatus = 'BOUNCED';
         updateContact = true;
 
@@ -258,7 +264,7 @@ export class InstantlyWebhookController {
 
         break;
 
-      case 'email.unsubscribed':
+      case 'email_unsubscribed':
         newStatus = 'UNSUBSCRIBED';
         updateContact = true;
 

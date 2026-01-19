@@ -16,7 +16,14 @@ export function createApp(): Express {
 
   // Security middleware
   app.use(helmet());
-  app.use(cors());
+  
+  // CORS - restrict to frontend URL in production
+  app.use(cors({
+    origin: config.isProduction 
+      ? process.env.FRONTEND_URL 
+      : '*',
+    credentials: true,
+  }));
 
   // Request ID (for tracing)
   app.use(requestIdMiddleware);

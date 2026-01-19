@@ -356,22 +356,52 @@ export class LeadIngestionService {
           jobId,
           email: contact.email,
           rowNumber,
+          needsEmailEnrichment: contact.needsEmailEnrichment,
         }, 'Processing contact');
 
-        // 1. Validate email (immediate)
-        const emailValidation = await emailValidationService.validateEmail(contact.email);
-        
-        if (!emailValidation.isValid) {
-          logger.warn({
-            email: contact.email,
-            validationResult: emailValidation.result,
-          }, 'Email validation failed');
+        // Check if this contact needs email enrichment (Google Maps without email)
+        const needsEnrichment = contact.needsEmailEnrichment || (!contact.email && contact.source === 'google_maps');
+        let emailValidationStatus = 'PENDING';
+        let contactStatus: ContactStatus = ContactStatus.NEW;
+
+        // 1. Validate email (if present)
+        if (contact.email) {
+          const emailValidation = await emailValidationService.validateEmail(contact.email);
           
+          if (!emailValidation.isValid) {
+            logger.warn({
+              email: contact.email,
+              validationResult: emailValidation.result,
+            }, 'Email validation failed');
+            
+            invalid++;
+            errors.push({
+              row: rowNumber,
+              email: contact.email,
+              error: `Invalid email: ${emailValidation.result}`,
+            });
+            continue;
+          }
+          
+          emailValidationStatus = emailValidation.isValid ? 'VALID' : 'INVALID';
+          contactStatus = emailValidation.isValid ? ContactStatus.VALIDATED : ContactStatus.INVALID;
+          contact.email = emailValidation.normalizedEmail || contact.email;
+        } else if (needsEnrichment) {
+          // No email but flagged for enrichment - allow import
+          logger.info({
+            rowNumber,
+            company: contact.company?.name,
+            source: contact.source,
+          }, 'Contact without email - will be enriched via Hunter');
+          emailValidationStatus = 'PENDING'; // PENDING indicates needs enrichment
+          contactStatus = ContactStatus.NEW;
+        } else {
+          // No email and not flagged for enrichment - skip
           invalid++;
           errors.push({
             row: rowNumber,
-            email: contact.email,
-            error: `Invalid email: ${emailValidation.result}`,
+            email: 'none',
+            error: 'No email provided',
           });
           continue;
         }
@@ -399,17 +429,34 @@ export class LeadIngestionService {
           }
         }
 
-        // 3. Check for duplicates
-        const dupCheck = await deduplicationService.checkDuplicate(contact.email);
-        
-        if (dupCheck.isDuplicate) {
-          logger.info({
-            email: contact.email,
-            existingContactId: dupCheck.existingContactId,
-          }, 'Duplicate contact found, skipping');
+        // 3. Check for duplicates (by email if available, by company+phone otherwise)
+        if (contact.email) {
+          const dupCheck = await deduplicationService.checkDuplicate(contact.email);
           
-          duplicates++;
-          continue;
+          if (dupCheck.isDuplicate) {
+            logger.info({
+              email: contact.email,
+              existingContactId: dupCheck.existingContactId,
+            }, 'Duplicate contact found, skipping');
+            
+            duplicates++;
+            continue;
+          }
+        } else if (contact.googlePlaceId) {
+          // Check by Google Place ID for contacts without email
+          const existingByPlaceId = await prisma.contact.findFirst({
+            where: { googlePlaceId: contact.googlePlaceId },
+          });
+          
+          if (existingByPlaceId) {
+            logger.info({
+              googlePlaceId: contact.googlePlaceId,
+              existingContactId: existingByPlaceId.id,
+            }, 'Duplicate contact found by Place ID, skipping');
+            
+            duplicates++;
+            continue;
+          }
         }
 
         // 4. Create or find company
@@ -420,9 +467,12 @@ export class LeadIngestionService {
         }
 
         // 5. Create contact
+        // Generate a placeholder email for contacts pending enrichment (to satisfy unique constraint)
+        const placeholderEmail = contact.email || `pending_${contact.googlePlaceId || Date.now()}_${Math.random().toString(36).slice(2, 7)}@needs-enrichment.local`;
+        
         await prisma.contact.create({
           data: {
-            email: emailValidation.normalizedEmail || contact.email,
+            email: placeholderEmail, // Placeholder for contacts pending enrichment
             firstName: contact.firstName,
             lastName: contact.lastName,
             fullName: contact.fullName,
@@ -435,15 +485,16 @@ export class LeadIngestionService {
             country: contact.country,
             timezone: contact.timezone,
             companyId,
-            status: emailValidation.isValid ? ContactStatus.VALIDATED : ContactStatus.INVALID,
-            emailValidationStatus: emailValidation.isValid ? 'VALID' : 'INVALID',
+            status: contactStatus,
+            emailValidationStatus: emailValidationStatus as any,
             phoneValidationStatus: phoneValidationStatus as any,
-            emailValidatedAt: new Date(),
+            emailValidatedAt: contact.email ? new Date() : null,
             phoneValidatedAt: contact.phone ? new Date() : null,
             source: contact.source,
             sourceId: contact.sourceId,
             apolloId: contact.apolloId,
             googlePlaceId: contact.googlePlaceId || null, // For Google Maps deduplication
+            dataSources: contact.source === 'google_maps' ? ['GOOGLE_MAPS'] : [],
             enrichmentData: contact.enrichmentData,
           },
         });

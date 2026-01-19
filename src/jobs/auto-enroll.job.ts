@@ -3,17 +3,25 @@
  * Daily auto-enrollment into Email and SMS campaigns
  * Day 8: Daily Automation
  * 
- * REQUIREMENTS:
- * - Default Email Campaign must be set in Settings (settings.defaultEmailCampaignId)
- * - Default SMS Campaign must be set in Settings (settings.defaultSmsCampaignId)
+ * UPDATED: Now uses Campaign Routing Rules for intelligent lead routing
  * 
- * Configure via:
- * - POST /api/v1/settings/default-campaigns/email  with { campaignId: "uuid" }
- * - POST /api/v1/settings/default-campaigns/sms    with { campaignId: "uuid" }
+ * ROUTING BEHAVIOR:
+ * 1. For each validated contact, evaluate routing rules by priority
+ * 2. First matching rule determines the target campaign
+ * 3. If no rule matches, fallback behavior is applied:
+ *    - "default_campaign": Use settings.defaultEmailCampaignId
+ *    - "skip": Don't enroll the contact
+ * 
+ * Configure routing rules via:
+ * - GET/POST /api/v1/campaigns/routing-rules
+ * 
+ * Configure fallback via:
+ * - Settings > routingFallbackBehavior
  */
 
 import { prisma } from '../config/database';
 import { campaignService } from '../services/campaign/campaign.service';
+import { campaignRoutingService } from '../services/campaign/routing.service';
 import { emailOutreachService } from '../services/outreach/email.service';
 import { settingsService } from '../services/settings/settings.service';
 import { logger } from '../utils/logger';
@@ -27,6 +35,9 @@ export interface AutoEnrollJobResult {
   contactsProcessed: number;
   emailEnrollments: number;
   smsEnrollments: number;
+  routedByRule: number;
+  routedByFallback: number;
+  skippedNoMatch: number;
   errors: string[];
   duration: number;
   skippedReason?: string;
@@ -48,46 +59,64 @@ export class AutoEnrollJob {
           contactsProcessed: 0,
           emailEnrollments: 0,
           smsEnrollments: 0,
+          routedByRule: 0,
+          routedByFallback: 0,
+          skippedNoMatch: 0,
           errors: [],
           duration,
           skippedReason: 'Job disabled in settings (enrollJobEnabled: false or pipeline disabled)',
         };
       }
 
-      // Get default campaign IDs from settings (creates defaults if not exists)
+      // Get settings for SMS campaign and fallback behavior
       const settings = await settingsService.getSettings();
 
-      // Validate default campaigns are configured
-      if (!settings.defaultEmailCampaignId && !settings.defaultSmsCampaignId) {
+      // Check if we have any routing rules OR a default campaign configured
+      const routingRules = await prisma.campaignRoutingRule.findMany({
+        where: { isActive: true },
+      });
+      
+      const hasRoutingRules = routingRules.length > 0;
+      const hasDefaultEmailCampaign = !!settings.defaultEmailCampaignId;
+      const hasDefaultSmsCampaign = !!settings.defaultSmsCampaignId;
+
+      if (!hasRoutingRules && !hasDefaultEmailCampaign && !hasDefaultSmsCampaign) {
         const duration = Date.now() - startTime;
         logger.warn(
-          'Auto-enroll job skipped: No default campaigns configured. ' +
-          'Set default campaigns via POST /api/v1/settings/default-campaigns/email and /sms'
+          'Auto-enroll job skipped: No routing rules or default campaigns configured.'
         );
         return {
           success: true,
           contactsProcessed: 0,
           emailEnrollments: 0,
           smsEnrollments: 0,
+          routedByRule: 0,
+          routedByFallback: 0,
+          skippedNoMatch: 0,
           errors: [],
           duration,
-          skippedReason: 'No default campaigns configured. Configure via Settings > Default Campaigns in the UI.',
+          skippedReason: 'No routing rules or default campaigns configured. Configure via Settings > Routing Rules.',
         };
       }
 
-      // Log which campaigns are available
+      // Log configuration
       logger.info({
+        routingRulesCount: routingRules.length,
+        fallbackBehavior: settings.routingFallbackBehavior,
         defaultEmailCampaignId: settings.defaultEmailCampaignId || 'NOT SET',
         defaultSmsCampaignId: settings.defaultSmsCampaignId || 'NOT SET',
-      }, 'Default campaign configuration');
+      }, 'Auto-enroll configuration');
 
-      // Get validated contacts that aren't enrolled yet
+      // Get validated contacts that aren't enrolled yet (include company for routing)
       const contacts = await prisma.contact.findMany({
         where: {
           status: 'VALIDATED',
           campaignEnrollments: {
             none: {},
           },
+        },
+        include: {
+          company: true,
         },
         take: config.batchSize,
         orderBy: { createdAt: 'desc' },
@@ -97,33 +126,67 @@ export class AutoEnrollJob {
 
       let emailEnrollments = 0;
       let smsEnrollments = 0;
+      let routedByRule = 0;
+      let routedByFallback = 0;
+      let skippedNoMatch = 0;
       const errors: string[] = [];
 
       for (const contact of contacts) {
         let enrolledInAny = false;
         
         try {
-          // Enroll in Email campaign (if configured and contact has email)
-          if (settings.defaultEmailCampaignId && contact.email) {
+          // ==================== EMAIL ROUTING ====================
+          if (contact.email) {
             try {
               // Check if email outreach is enabled
               const emailEnabled = await settingsService.isOutreachEnabled('email');
               if (emailEnabled) {
-                await campaignService.enrollContacts(settings.defaultEmailCampaignId, [contact.id]);
+                // Use routing service to determine target campaign
+                const routeResult = await campaignRoutingService.routeContact(contact);
                 
-                // Add to Instantly
-                await emailOutreachService.enrollInInstantly(
-                  settings.defaultEmailCampaignId,
-                  [contact.id],
-                  {
-                    skipIfInWorkspace: true,
-                    skipIfInCampaign: true,
+                if (routeResult.campaign) {
+                  // Enroll in the routed campaign
+                  await campaignService.enrollContacts(routeResult.campaign.id, [contact.id]);
+                  
+                  // Add to Instantly
+                  await emailOutreachService.enrollInInstantly(
+                    routeResult.campaign.id,
+                    [contact.id],
+                    {
+                      skipIfInWorkspace: true,
+                      skipIfInCampaign: true,
+                    }
+                  );
+                  
+                  emailEnrollments++;
+                  enrolledInAny = true;
+                  
+                  if (routeResult.matchedRule) {
+                    routedByRule++;
+                    logger.debug({ 
+                      contactId: contact.id, 
+                      ruleId: routeResult.matchedRule.id,
+                      ruleName: routeResult.matchedRule.name,
+                      campaignId: routeResult.campaign.id,
+                      campaignName: routeResult.campaign.name,
+                    }, 'Contact routed by rule');
+                  } else {
+                    routedByFallback++;
+                    logger.debug({ 
+                      contactId: contact.id, 
+                      campaignId: routeResult.campaign.id,
+                      campaignName: routeResult.campaign.name,
+                    }, 'Contact routed by fallback');
                   }
-                );
-                
-                emailEnrollments++;
-                enrolledInAny = true;
-                logger.debug({ contactId: contact.id }, 'Enrolled in email campaign');
+                } else {
+                  // No campaign matched and fallback is "skip"
+                  skippedNoMatch++;
+                  logger.debug({ 
+                    contactId: contact.id, 
+                    source: contact.source,
+                    state: contact.state,
+                  }, 'Contact skipped - no routing rule matched');
+                }
               } else {
                 logger.debug({ contactId: contact.id }, 'Email outreach disabled, skipping email enrollment');
               }
@@ -133,7 +196,8 @@ export class AutoEnrollJob {
             }
           }
 
-          // Enroll in SMS campaign (if configured and contact has phone)
+          // ==================== SMS ENROLLMENT ====================
+          // SMS still uses the default campaign (no routing rules for SMS yet)
           if (settings.defaultSmsCampaignId && contact.phone) {
             try {
               // Check if SMS outreach is enabled
@@ -166,7 +230,7 @@ export class AutoEnrollJob {
           } else {
             logger.info(
               { contactId: contact.id, hasEmail: !!contact.email, hasPhone: !!contact.phone },
-              'Contact not enrolled - missing contact info or outreach disabled'
+              'Contact not enrolled - missing contact info, outreach disabled, or no matching rule'
             );
           }
         } catch (error: any) {
@@ -182,6 +246,9 @@ export class AutoEnrollJob {
           contactsProcessed: contacts.length,
           emailEnrollments,
           smsEnrollments,
+          routedByRule,
+          routedByFallback,
+          skippedNoMatch,
           duration,
         },
         'Auto-enroll job completed'
@@ -192,6 +259,9 @@ export class AutoEnrollJob {
         contactsProcessed: contacts.length,
         emailEnrollments,
         smsEnrollments,
+        routedByRule,
+        routedByFallback,
+        skippedNoMatch,
         errors,
         duration,
       };
@@ -204,6 +274,9 @@ export class AutoEnrollJob {
         contactsProcessed: 0,
         emailEnrollments: 0,
         smsEnrollments: 0,
+        routedByRule: 0,
+        routedByFallback: 0,
+        skippedNoMatch: 0,
         errors: [error.message],
         duration,
       };
@@ -212,4 +285,3 @@ export class AutoEnrollJob {
 }
 
 export const autoEnrollJob = new AutoEnrollJob();
-

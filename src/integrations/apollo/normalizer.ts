@@ -314,6 +314,9 @@ function inferTimezone(state: string | null, country: string | null): string | n
 
 /**
  * Build Apollo search params for specific industries and criteria
+ * 
+ * Spec: January 2, 2026 - Contractor Lead Lists
+ * Defaults: 10-100 employees, $1M-$10M revenue, excludes wholesalers/manufacturers
  */
 export function buildSearchParamsForIndustry(
   industry: 'HVAC' | 'SOLAR' | 'ROOFING',
@@ -331,24 +334,35 @@ export function buildSearchParamsForIndustry(
   } = {}
 ): any {
   const {
-    revenueMin = 2000000,
+    // Spec: $1M - $10M revenue range
+    revenueMin = 1000000,
     revenueMax = 10000000,
+    // Spec: 10-100 employees
     employeesMin = 10,
-    employeesMax = 50,
+    employeesMax = 100,
     locations = [],
     excludeLocations = [],
+    // Spec: decision maker titles including VP Sales
     jobTitles = [
       'Owner',
       'CEO',
       'President',
       'COO',
       'VP Operations',
+      'VP Sales',
       'General Manager',
     ],
     technologies = [],
     page = 1,
     perPage = 100,
   } = options;
+
+  // Spec-compliant priority locations by industry
+  const PRIORITY_LOCATIONS = {
+    SOLAR: ['California, United States', 'Texas, United States', 'Florida, United States', 'Arizona, United States', 'North Carolina, United States'],
+    HVAC: ['Texas, United States', 'Arizona, United States', 'Florida, United States', 'California, United States', 'North Carolina, United States', 'Georgia, United States'],
+    ROOFING: ['Texas, United States', 'Florida, United States', 'California, United States', 'North Carolina, United States', 'Georgia, United States', 'Arizona, United States'],
+  };
 
   const params: any = {
     // Person filters
@@ -361,6 +375,17 @@ export function buildSearchParamsForIndustry(
       max: revenueMax,
     },
     
+    // REQUIRED: Negative filters - exclude wholesalers, manufacturers, distributors (per spec)
+    q_organization_not_keyword_tags: [
+      'wholesale',
+      'distribution',
+      'distributor',
+      'manufacturer',
+      'manufacturing',
+      'supply',
+      'supplier',
+    ],
+    
     // Pagination
     page,
     per_page: perPage,
@@ -370,7 +395,7 @@ export function buildSearchParamsForIndustry(
     reveal_phone_number: true,
   };
 
-  // Industry-specific logic
+  // Industry-specific keywords (spec-compliant)
   if (industry === 'HVAC') {
     params.q_organization_keywords = 'HVAC OR "Heating and Air Conditioning" OR "Air Conditioning Contractor" OR "HVAC Services"';
   } else if (industry === 'SOLAR') {
@@ -379,12 +404,16 @@ export function buildSearchParamsForIndustry(
     params.q_organization_keywords = 'Roofing OR "Roofing Contractor" OR "Roof Installation" OR "Residential Roofing"';
   }
 
-  // Location filters
+  // Location filters - use industry-specific defaults if not provided
   if (locations.length > 0) {
     params.organization_locations = locations;
   } else {
-    // Default to US
-    params.organization_locations = ['United States'];
+    params.organization_locations = PRIORITY_LOCATIONS[industry];
+  }
+
+  // Exclude locations (e.g., Southern California for Solar)
+  if (excludeLocations.length > 0) {
+    params.organization_not_locations = excludeLocations;
   }
 
   // Technology filters

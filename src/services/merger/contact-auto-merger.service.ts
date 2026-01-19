@@ -244,7 +244,7 @@ export class ContactAutoMergerService {
           mergeStrategy: 'most_complete',
           winnerScore: winnerScore.score,
           loserScore: loserScore.score,
-          fieldsMerged: fieldsMerged.length > 0 ? { fields: fieldsMerged } : null,
+          fieldsMerged: fieldsMerged.length > 0 ? { fields: fieldsMerged } : Prisma.JsonNull,
           outreachStepsMoved: outreachSteps.count,
           repliesMoved: replies.count,
           activityLogsMoved: activityLogs.count,

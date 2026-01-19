@@ -6,7 +6,8 @@
 # Imports 5 records from Apollo and 5 records from Apify (Google Maps)
 ###############################################################################
 
-set -e  # Exit on error
+# Continue on non-critical errors to show full pipeline results
+set +e
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -43,12 +44,13 @@ format_json() {
     fi
 }
 
-# Helper function to extract value from JSON
+# Helper function to extract value from JSON (from .data object)
 extract_json() {
+    local field="$1"
     if [ "$JQ_AVAILABLE" = true ]; then
-        jq -r "$1"
+        jq -r ".data.$field // .data.result.$field // \"N/A\"" 2>/dev/null || echo "N/A"
     else
-        grep -o "\"$1\"[^,}]*" | head -1 | cut -d'"' -f4
+        grep -o "\"$field\"[^,}]*" | head -1 | cut -d'"' -f4
     fi
 }
 
@@ -278,7 +280,7 @@ echo ""
 
 # List recent contacts
 echo -e "${GREEN}Recently Imported Contacts (First 5):${NC}"
-RECENT_CONTACTS=$(curl -s "$BASE_URL/contacts?limit=5&sort=createdAt:desc" \
+RECENT_CONTACTS=$(curl -s "$BASE_URL/contacts?limit=5&sort=createdAt&order=desc" \
   -H "Authorization: Bearer $API_KEY")
 
 echo "$RECENT_CONTACTS" | format_json

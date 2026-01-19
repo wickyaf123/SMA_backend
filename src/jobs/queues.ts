@@ -16,6 +16,7 @@ import { logger } from '../utils/logger';
 
 /**
  * Default queue options with retry and cleanup policies
+ * Optimized to reduce Redis request volume
  */
 const defaultQueueOptions: QueueOptions = {
   connection: redis,
@@ -27,10 +28,15 @@ const defaultQueueOptions: QueueOptions = {
     },
     removeOnComplete: {
       age: 24 * 3600, // Keep completed jobs for 24 hours
-      count: 1000,
+      count: 500,     // Reduced from 1000 to limit Redis storage
     },
     removeOnFail: {
-      age: 7 * 24 * 3600, // Keep failed jobs for 7 days
+      age: 3 * 24 * 3600, // Reduced from 7 days to 3 days
+    },
+  },
+  streams: {
+    events: {
+      maxLen: 100, // Limit event stream length to reduce Redis memory/requests
     },
   },
 };
@@ -44,6 +50,11 @@ const highPriorityQueueOptions: QueueOptions = {
     ...defaultQueueOptions.defaultJobOptions,
     priority: 1,
     attempts: 5,
+  },
+  streams: {
+    events: {
+      maxLen: 100, // Limit event stream length
+    },
   },
 };
 
@@ -228,7 +239,7 @@ export function getQueue(name: string): Queue | undefined {
  * Get queue status for all queues
  */
 export async function getAllQueueStats(): Promise<Array<{
-  name: string;
+  queueName: string;
   waiting: number;
   active: number;
   completed: number;
@@ -248,7 +259,7 @@ export async function getAllQueueStats(): Promise<Array<{
       ]);
 
       return {
-        name: queue.name,
+        queueName: queue.name,
         waiting,
         active,
         completed,

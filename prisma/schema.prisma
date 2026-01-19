@@ -211,6 +211,7 @@ model Campaign {
   linkedinEnabled       Boolean              @default(true)
   
   enrollments           CampaignEnrollment[]
+  routingRules          CampaignRoutingRule[]
   
   createdAt             DateTime             @default(now())
   updatedAt             DateTime             @updatedAt
@@ -219,6 +220,37 @@ model Campaign {
   @@index([channel])
   @@index([instantlyCampaignId])
   @@index([createdAt])
+}
+
+// Campaign Routing Rules for flexible lead routing to different Instantly campaigns
+model CampaignRoutingRule {
+  id                  String    @id @default(uuid())
+  name                String
+  description         String?
+  priority            Int       @default(0)    // Higher = evaluated first
+  isActive            Boolean   @default(true)
+  
+  // Filter logic mode: ALL = all filters must match (AND), ANY = at least one filter must match (OR)
+  matchMode           String    @default("ALL")
+  
+  // Filter conditions (arrays for flexible matching)
+  sourceFilter        String[]  @default([])   // e.g., ['apollo', 'scraper', 'csv']
+  industryFilter      String[]  @default([])   // e.g., ['HVAC', 'Plumbing']
+  stateFilter         String[]  @default([])   // e.g., ['CA', 'TX', 'FL']
+  countryFilter       String[]  @default([])   // e.g., ['United States']
+  tagsFilter          String[]  @default([])   // e.g., ['high-value', 'priority']
+  employeesMinFilter  Int?                     // Minimum company size
+  employeesMaxFilter  Int?                     // Maximum company size
+  
+  // Target campaign
+  campaignId          String
+  campaign            Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
+  @@index([isActive, priority])
+  @@index([campaignId])
 }
 
 model CampaignEnrollment {
@@ -597,6 +629,9 @@ model Settings {
   // Emergency Stop Tracking
   lastEmergencyStopAt       DateTime?
   lastEmergencyStopBy       String?
+  
+  // Campaign Routing
+  routingFallbackBehavior   String    @default("default_campaign")  // "default_campaign" or "skip"
   
   // Metadata
   createdAt                 DateTime  @default(now())

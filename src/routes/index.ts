@@ -27,7 +27,7 @@ router.use(healthRoutes);
 
 // Webhooks (public - no auth, validated by provider signatures)
 // Note: /webhooks/logs requires auth (handled inside webhook.routes.ts)
-router.use('/webhooks', webhookRoutes);
+router.use('/api/v1/webhooks', webhookRoutes);
 
 // Phase 2: Lead Ingestion & Contact Management (protected)
 router.use('/contacts', authenticateApiKey, contactRoutes);

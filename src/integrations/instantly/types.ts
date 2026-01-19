@@ -53,30 +53,82 @@ export interface InstantlyGetCampaignEmailsResponse {
 }
 
 /**
- * Webhook event types
+ * Webhook event types (Instantly uses underscore format)
  */
 export type InstantlyWebhookEvent =
-  | 'email.sent'
-  | 'email.delivered'
-  | 'email.opened'
-  | 'email.clicked'
-  | 'email.replied'
-  | 'email.bounced'
-  | 'email.unsubscribed';
+  | 'email_sent'
+  | 'email_delivered'
+  | 'email_opened'
+  | 'email_clicked'
+  | 'email_replied'
+  | 'email_bounced'
+  | 'email_unsubscribed';
 
+/**
+ * Instantly webhook payload - FLAT structure (not nested)
+ * All fields are at the root level
+ */
 export interface InstantlyWebhookPayload {
-  event: InstantlyWebhookEvent;
+  // Event info
+  event_type: InstantlyWebhookEvent;
   timestamp: string;
-  data: {
-    campaign_id: string;
-    email: string;
-    message_id?: string;
-    reply_text?: string;
-    reply_from?: string;
-    reply_to?: string;
-    bounce_reason?: string;
-    [key: string]: any;
-  };
+  
+  // Lead/contact info
+  email: string;
+  lead_email?: string;
+  firstName?: string;
+  lastName?: string;
+  
+  // Campaign info
+  campaign_id: string;
+  campaign?: string; // Same as campaign_id
+  campaign_name?: string;
+  
+  // Email details
+  email_id?: string;
+  email_subject?: string;
+  email_html?: string;
+  email_account?: string;
+  
+  // Company info
+  companyName?: string;
+  companyDomain?: string;
+  companyWebsite?: string;
+  companyDescription?: string;
+  companyHeadCount?: string;
+  
+  // Professional info
+  jobTitle?: string;
+  jobLevel?: string;
+  department?: string;
+  industry?: string;
+  subIndustry?: string;
+  linkedIn?: string;
+  headline?: string;
+  summary?: string;
+  location?: string;
+  
+  // Step/sequence info
+  step?: number;
+  variant?: number;
+  is_first?: boolean;
+  
+  // Reply-specific fields
+  reply_text?: string;
+  reply_from?: string;
+  reply_from_name?: string;
+  message_id?: string;
+  subject?: string;
+  original_subject?: string;
+  
+  // Bounce-specific fields
+  bounce_reason?: string;
+  
+  // Workspace
+  workspace?: string;
+  
+  // Allow any additional fields
+  [key: string]: any;
 }
 
 export interface InstantlyConfig {

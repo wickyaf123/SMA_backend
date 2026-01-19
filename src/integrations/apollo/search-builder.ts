@@ -141,6 +141,7 @@ export class ApolloSearchBuilder {
 
 /**
  * Preset builder for HVAC companies
+ * Spec: January 2, 2026 - Contractor Lead Lists
  */
 export function buildHVACSearch(options: {
   locations?: string[];
@@ -163,17 +164,28 @@ export function buildHVACSearch(options: {
       'President',
       'COO',
       'VP Operations',
+      'VP Sales',
       'General Manager',
-    ]);
+    ])
+    // Apply defaults per spec: 10-100 employees, $1M-$10M revenue
+    .withEmployeeRange(options.employeesMin || 10, options.employeesMax || 100)
+    .withRevenueRange(options.revenueMin || 1000000, options.revenueMax || 10000000);
 
-  if (options.locations) builder.withLocations(options.locations);
+  // Spec: TX, AZ, FL, CA, NC, GA (priority order)
+  if (options.locations) {
+    builder.withLocations(options.locations);
+  } else {
+    builder.withLocations([
+      'Texas, United States',
+      'Arizona, United States',
+      'Florida, United States',
+      'California, United States',
+      'North Carolina, United States',
+      'Georgia, United States',
+    ]);
+  }
+  
   if (options.excludeLocations) builder.excludeLocations(options.excludeLocations);
-  if (options.revenueMin && options.revenueMax) {
-    builder.withRevenueRange(options.revenueMin, options.revenueMax);
-  }
-  if (options.employeesMin && options.employeesMax) {
-    builder.withEmployeeRange(options.employeesMin, options.employeesMax);
-  }
   if (options.technologies) builder.withTechnologies(options.technologies);
   if (options.employeeGrowth) builder.withEmployeeGrowth(options.employeeGrowth);
 
@@ -182,6 +194,7 @@ export function buildHVACSearch(options: {
 
 /**
  * Preset builder for Solar companies
+ * Spec: January 2, 2026 - Contractor Lead Lists
  */
 export function buildSolarSearch(options: {
   locations?: string[];
@@ -205,10 +218,14 @@ export function buildSolarSearch(options: {
       'President',
       'COO',
       'VP Operations',
+      'VP Sales',
       'General Manager',
-    ]);
+    ])
+    // Apply defaults per spec: 10-100 employees, $1M-$10M revenue
+    .withEmployeeRange(options.employeesMin || 10, options.employeesMax || 100)
+    .withRevenueRange(options.revenueMin || 1000000, options.revenueMax || 10000000);
 
-  // Handle Southern California exclusion for solar
+  // Handle Southern California exclusion for solar (per spec)
   const excludeLocations = options.excludeLocations || [];
   if (options.excludeSouthernCalifornia) {
     excludeLocations.push(
@@ -220,14 +237,20 @@ export function buildSolarSearch(options: {
     );
   }
 
-  if (options.locations) builder.withLocations(options.locations);
+  // Spec: CA, TX, FL, AZ, NC (priority order)
+  if (options.locations) {
+    builder.withLocations(options.locations);
+  } else {
+    builder.withLocations([
+      'California, United States',
+      'Texas, United States',
+      'Florida, United States',
+      'Arizona, United States',
+      'North Carolina, United States',
+    ]);
+  }
+  
   if (excludeLocations.length > 0) builder.excludeLocations(excludeLocations);
-  if (options.revenueMin && options.revenueMax) {
-    builder.withRevenueRange(options.revenueMin, options.revenueMax);
-  }
-  if (options.employeesMin && options.employeesMax) {
-    builder.withEmployeeRange(options.employeesMin, options.employeesMax);
-  }
   if (options.technologies) builder.withTechnologies(options.technologies);
   if (options.employeeGrowth) builder.withEmployeeGrowth(options.employeeGrowth);
 
@@ -236,6 +259,7 @@ export function buildSolarSearch(options: {
 
 /**
  * Preset builder for Roofing companies
+ * Spec: January 2, 2026 - Contractor Lead Lists
  */
 export function buildRoofingSearch(options: {
   locations?: string[];
@@ -258,17 +282,28 @@ export function buildRoofingSearch(options: {
       'President',
       'COO',
       'VP Operations',
+      'VP Sales',
       'General Manager',
-    ]);
+    ])
+    // Apply defaults per spec: 10-100 employees, $1M-$10M revenue
+    .withEmployeeRange(options.employeesMin || 10, options.employeesMax || 100)
+    .withRevenueRange(options.revenueMin || 1000000, options.revenueMax || 10000000);
 
-  if (options.locations) builder.withLocations(options.locations);
+  // Spec: TX, FL, CA, NC, GA, AZ (priority order)
+  if (options.locations) {
+    builder.withLocations(options.locations);
+  } else {
+    builder.withLocations([
+      'Texas, United States',
+      'Florida, United States',
+      'California, United States',
+      'North Carolina, United States',
+      'Georgia, United States',
+      'Arizona, United States',
+    ]);
+  }
+  
   if (options.excludeLocations) builder.excludeLocations(options.excludeLocations);
-  if (options.revenueMin && options.revenueMax) {
-    builder.withRevenueRange(options.revenueMin, options.revenueMax);
-  }
-  if (options.employeesMin && options.employeesMax) {
-    builder.withEmployeeRange(options.employeesMin, options.employeesMax);
-  }
   if (options.technologies) builder.withTechnologies(options.technologies);
   if (options.employeeGrowth) builder.withEmployeeGrowth(options.employeeGrowth);
 

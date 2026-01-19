@@ -51,6 +51,10 @@ export async function initializeWorkers(): Promise<void> {
     {
       connection: redis,
       concurrency: 5,
+      limiter: {
+        max: 10,
+        duration: 1000, // 10 jobs per second max
+      },
     }
   );
 
@@ -61,6 +65,10 @@ export async function initializeWorkers(): Promise<void> {
     {
       connection: redis,
       concurrency: 2, // Lower concurrency due to API rate limits
+      limiter: {
+        max: 5,
+        duration: 1000, // 5 jobs per second max
+      },
     }
   );
 
@@ -71,6 +79,10 @@ export async function initializeWorkers(): Promise<void> {
     {
       connection: redis,
       concurrency: 5,
+      limiter: {
+        max: 10,
+        duration: 1000, // 10 jobs per second max
+      },
     }
   );
 
@@ -85,12 +97,16 @@ export async function initializeWorkers(): Promise<void> {
     {
       connection: redis,
       concurrency: 3,
+      limiter: {
+        max: 5,
+        duration: 1000, // 5 jobs per second max
+      },
     }
   );
 
   // Legacy Validation Worker (for backward compatibility)
-const validationWorker = new Worker<ValidationJobData>(
-  'validation',
+  const validationWorker = new Worker<ValidationJobData>(
+    'validation',
     async (job: Job<ValidationJobData>) => {
       // Delegate to lead processor
       return processLeadJob({
@@ -105,37 +121,49 @@ const validationWorker = new Worker<ValidationJobData>(
         },
       } as any);
     },
-  {
-    connection: redis,
-    concurrency: 5,
-  }
-);
+    {
+      connection: redis,
+      concurrency: 5,
+      limiter: {
+        max: 10,
+        duration: 1000, // 10 jobs per second max
+      },
+    }
+  );
 
   // Legacy Outreach Worker
-const outreachWorker = new Worker<OutreachJobData>(
-  'outreach',
+  const outreachWorker = new Worker<OutreachJobData>(
+    'outreach',
     async (job: Job<OutreachJobData>) => {
       logger.info({ jobId: job.id, data: job.data }, 'Processing outreach job');
       // Outreach is handled by Instantly webhooks and GHL
       return { success: true, message: 'Outreach handled by external services' };
     },
-  {
-    connection: redis,
-    concurrency: 10,
-  }
-);
+    {
+      connection: redis,
+      concurrency: 10,
+      limiter: {
+        max: 15,
+        duration: 1000, // 15 jobs per second max
+      },
+    }
+  );
 
   // Legacy LinkedIn Worker
-const linkedinWorker = new Worker<LinkedInJobData>(
-  'linkedin',
+  const linkedinWorker = new Worker<LinkedInJobData>(
+    'linkedin',
     async (job: Job<LinkedInJobData>) => {
       logger.info({ jobId: job.id, data: job.data }, 'Processing LinkedIn job');
       // LinkedIn is handled by PhantomBuster
       return { success: true, message: 'LinkedIn handled by PhantomBuster' };
     },
-  {
-    connection: redis,
+    {
+      connection: redis,
       concurrency: 2,
+      limiter: {
+        max: 3,
+        duration: 1000, // 3 jobs per second max
+      },
     }
   );
 

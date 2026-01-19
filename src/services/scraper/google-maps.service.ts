@@ -267,8 +267,10 @@ export class GoogleMapsScraperService {
                 if (!normalized) return null;
                 
                 // Convert to contact format for ingestion
+                // Note: email can be null - will be enriched via Hunter.io later
                 return {
-                  email: normalized.email || `noemail+${normalized.businessName.replace(/\s+/g, '')}@placeholder.com`,
+                  email: normalized.email || null,
+                  needsEmailEnrichment: !normalized.email, // Flag for Hunter enrichment
                   firstName: null,
                   lastName: null,
                   fullName: null,
@@ -474,8 +476,10 @@ export class GoogleMapsScraperService {
         .filter((listing): listing is NonNullable<typeof listing> => listing !== null);
 
       // Convert to contact format for processContacts
+      // Note: email can be null - will be enriched via Hunter.io later
       const contacts = normalizedListings.map((listing) => ({
-        email: listing.email || `noemail+${listing.businessName.replace(/\s+/g, '')}@placeholder.com`,
+        email: listing.email || null,
+        needsEmailEnrichment: !listing.email, // Flag for Hunter enrichment
         firstName: null,
         lastName: null,
         fullName: null,

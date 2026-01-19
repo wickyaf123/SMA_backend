@@ -191,7 +191,6 @@ async function processEnrichment(
     const contacts = await prisma.contact.findMany({
       where: {
         hunterEnrichedAt: null,
-        email: { not: null },
         emailValidationStatus: 'VALID',
       },
       take: 50,
@@ -302,14 +301,17 @@ async function processFullPipeline(
     validated: false,
     enriched: false,
     deduped: false,
+    emailStatus: 'PENDING' as string,
+    phoneStatus: 'PENDING' as string,
   };
 
-  // Step 1: Validate
+  // Step 1: Validate Email
   await job.updateProgress(10);
   if (contact.email) {
     try {
-      await emailValidationService.validateContactEmail(contactId);
+      const emailStatus = await emailValidationService.validateContactEmail(contactId);
       results.validated = true;
+      results.emailStatus = emailStatus;
       realtimeEmitter.emitContactValidated({
         contactId,
         email: contact.email,
@@ -321,23 +323,41 @@ async function processFullPipeline(
     }
   }
 
+  // Step 2: Validate Phone
   await job.updateProgress(40);
   if (contact.phone) {
     try {
-      await phoneValidationService.validateContactPhone(contactId);
+      const phoneStatus = await phoneValidationService.validateContactPhone(contactId);
       results.validated = true;
+      results.phoneStatus = phoneStatus;
+      realtimeEmitter.emitContactValidated({
+        contactId,
+        fullName: contact.fullName || undefined,
+        action: 'phone_validated',
+      });
     } catch (e) {
       logger.warn({ contactId, error: e }, 'Phone validation failed in pipeline');
     }
   }
 
-  // Step 2: Enrich (only if email is valid)
-  await job.updateProgress(60);
+  // Step 3: Update contact status based on validation results
+  await job.updateProgress(50);
   const updatedContact = await prisma.contact.findUnique({
     where: { id: contactId },
-    select: { emailValidationStatus: true },
+    select: { emailValidationStatus: true, phoneValidationStatus: true },
   });
 
+  // Set contact status to VALIDATED if email is valid
+  if (updatedContact?.emailValidationStatus === 'VALID') {
+    await prisma.contact.update({
+      where: { id: contactId },
+      data: { status: 'VALIDATED' },
+    });
+    logger.info({ contactId }, 'Contact status updated to VALIDATED');
+  }
+
+  // Step 4: Enrich (only if email is valid)
+  await job.updateProgress(60);
   if (updatedContact?.emailValidationStatus === 'VALID') {
     try {
       const enrichResult = await hunterService.enrichContact(contactId);
@@ -355,16 +375,38 @@ async function processFullPipeline(
     }
   }
 
-  // Step 3: Check for duplicates
+  // Step 5: Check for duplicates (skip if already checked during creation)
   await job.updateProgress(90);
-  try {
-    const dupCheck = await deduplicationService.checkDuplicate(contact.email!);
-    results.deduped = dupCheck.isDuplicate;
-  } catch (e) {
-    logger.warn({ contactId, error: e }, 'Dedup check failed in pipeline');
+  if (options?.checkDuplicates !== false && contact.email) {
+    try {
+      const dupCheck = await deduplicationService.checkDuplicate(contact.email);
+      results.deduped = dupCheck.isDuplicate;
+    } catch (e) {
+      logger.warn({ contactId, error: e }, 'Dedup check failed in pipeline');
+    }
   }
 
+  // Step 6: Create activity log for validation completion
+  await prisma.activityLog.create({
+    data: {
+      contactId,
+      action: 'VALIDATION_COMPLETED',
+      description: `Validation complete: Email ${results.emailStatus}, Phone ${results.phoneStatus}`,
+      actorType: 'SYSTEM',
+      metadata: {
+        emailStatus: results.emailStatus,
+        phoneStatus: results.phoneStatus,
+        enriched: results.enriched,
+      },
+    },
+  });
+
   await job.updateProgress(100);
+
+  logger.info({
+    contactId,
+    results,
+  }, 'Full pipeline completed for contact');
 
   return {
     success: true,

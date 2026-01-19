@@ -8,7 +8,7 @@ import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 import * as Sentry from '@sentry/node';
 
-export type JobType = 'SCRAPE' | 'ENRICH' | 'MERGE' | 'VALIDATE' | 'AUTO_ENROLL';
+export type JobType = 'SCRAPE' | 'APOLLO_SCRAPE' | 'ENRICH' | 'MERGE' | 'VALIDATE' | 'AUTO_ENROLL';
 export type JobStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 
 export interface JobLogData {
@@ -53,6 +53,7 @@ export class JobLogService {
       successCount: number;
       errorCount?: number;
       errors?: any;
+      metadata?: any;
     }
   ): Promise<void> {
     await prisma.importJob.update({

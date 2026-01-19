@@ -180,6 +180,10 @@ export class ContactController {
    * Uses a cost-effective two-step process:
    * 1. Search Apollo (free)
    * 2. Enrich contacts in batches (costs credits)
+   * 
+   * IMPORTANT: Industry is REQUIRED to ensure qualified contractor leads.
+   * Default filters applied per spec: 10-100 employees, $1M-$10M revenue,
+   * target US states, negative filters for wholesalers/manufacturers.
    */
   public async importFromApollo(
     req: Request,
@@ -212,6 +216,15 @@ export class ContactController {
         enrichLimit = 100, // Max contacts to enrich (default: 100)
       } = req.body;
 
+      // REQUIRE industry to ensure we only get qualified contractor leads
+      if (!industry || !['HVAC', 'SOLAR', 'ROOFING'].includes(industry)) {
+        res.status(400).json(errorResponse(
+          'Industry is required. Must be one of: HVAC, SOLAR, ROOFING',
+          400
+        ));
+        return;
+      }
+
       logger.info({
         industry,
         locations: organizationLocations,
@@ -219,57 +232,104 @@ export class ContactController {
         enrichLimit,
       }, 'Starting Apollo import request');
 
-      // Build Apollo search params
+      // Spec-compliant industry keywords (January 2, 2026 spec)
+      const INDUSTRY_KEYWORDS = {
+        HVAC: 'HVAC OR "Heating and Air Conditioning" OR "Air Conditioning Contractor" OR "HVAC Services"',
+        SOLAR: '"Solar Energy" OR "battery installer" OR "Solar Installation" OR "Renewable Energy" OR "Solar Contractor"',
+        ROOFING: 'Roofing OR "Roofing Contractor" OR "Roof Installation" OR "Residential Roofing"',
+      };
+
+      // Spec-compliant priority states by industry
+      const PRIORITY_LOCATIONS = {
+        SOLAR: ['California, United States', 'Texas, United States', 'Florida, United States', 'Arizona, United States', 'North Carolina, United States'],
+        HVAC: ['Texas, United States', 'Arizona, United States', 'Florida, United States', 'California, United States', 'North Carolina, United States', 'Georgia, United States'],
+        ROOFING: ['Texas, United States', 'Florida, United States', 'California, United States', 'North Carolina, United States', 'Georgia, United States', 'Arizona, United States'],
+      };
+
+      // Build Apollo search params with REQUIRED contractor filters
       const searchParams: any = {
-        person_titles: personTitles || ['Owner', 'CEO', 'President', 'COO', 'VP Operations', 'General Manager'],
-        organization_locations: organizationLocations || ['United States'],
+        // Decision maker titles (spec: Owner, CEO, President, COO, VP Operations, VP Sales, General Manager)
+        person_titles: personTitles || [
+          'Owner',
+          'CEO',
+          'President',
+          'COO',
+          'VP Operations',
+          'VP Sales',
+          'General Manager',
+        ],
+        
+        // Location filter - use provided or industry-specific defaults
+        organization_locations: organizationLocations || PRIORITY_LOCATIONS[industry as keyof typeof PRIORITY_LOCATIONS],
+        
+        // Pagination
         page: page || 1,
         per_page: perPage || 100,
         reveal_personal_emails: true,
         reveal_phone_number: true,
+        
+        // REQUIRED: Industry keywords (spec-compliant)
+        q_organization_keywords: INDUSTRY_KEYWORDS[industry as keyof typeof INDUSTRY_KEYWORDS],
+        
+        // REQUIRED: Employee range (spec: 10-100 employees)
+        organization_num_employees_ranges: employeesMin && employeesMax 
+          ? [`${employeesMin},${employeesMax}`] 
+          : ['10,100'],
+        
+        // REQUIRED: Revenue range (spec: $1M-$10M)
+        revenue_range: revenueMin && revenueMax 
+          ? { min: revenueMin, max: revenueMax } 
+          : { min: 1000000, max: 10000000 },
+        
+        // REQUIRED: Negative filters - exclude wholesalers, manufacturers, distributors
+        q_organization_not_keyword_tags: [
+          'wholesale',
+          'distribution',
+          'distributor',
+          'manufacturer',
+          'manufacturing',
+          'supply',
+          'supplier',
+        ],
       };
 
-      // Add industry keywords if specified
-      if (industry) {
-        const keywords = {
-          HVAC: 'HVAC OR "Heating Ventilation" OR "Air Conditioning" OR "HVAC Services"',
-          SOLAR: 'Solar OR "Solar Energy" OR "Solar Power" OR Photovoltaic',
-          ROOFING: 'Roofing OR Roofer OR "Roof Contractor"',
-        };
-        searchParams.q_organization_keywords = keywords[industry as keyof typeof keywords];
-      }
-
-      // Add location exclusions
+      // Add location exclusions (e.g., Southern California for Solar)
       if (excludeLocations && excludeLocations.length > 0) {
         searchParams.organization_not_locations = excludeLocations;
       }
 
-      // Add employee range
-      if (employeesMin && employeesMax) {
-        searchParams.organization_num_employees_ranges = [`${employeesMin},${employeesMax}`];
-      }
-
-      // Add revenue range
-      if (revenueMin && revenueMax) {
-        searchParams.revenue_range = { min: revenueMin, max: revenueMax };
-      }
-
-      // Add technologies
+      // Add technologies filter (optional)
       if (technologies && technologies.length > 0) {
         searchParams.organization_technologies = technologies;
       }
 
-      // Add employee growth rate
+      // Add employee growth rate filter (optional)
       if (employeeGrowth) {
         searchParams.organization_employee_growth_rate = `${employeeGrowth}%`;
       }
+
+      logger.info({
+        industry,
+        keywords: searchParams.q_organization_keywords,
+        locations: searchParams.organization_locations,
+        employeeRange: searchParams.organization_num_employees_ranges,
+        revenueRange: searchParams.revenue_range,
+        negativeFilters: searchParams.q_organization_not_keyword_tags,
+      }, 'Apollo search params configured with contractor filters');
 
       // Start import (async) with enrichment limit
       const result = await leadIngestionService.importFromApollo(searchParams, enrichLimit);
       
       res.status(202).json(successResponse(result, {
-        message: 'Apollo import started successfully',
+        message: `${industry} contractor import from Apollo started successfully`,
         enrichLimit,
+        filtersApplied: {
+          industry,
+          employeeRange: searchParams.organization_num_employees_ranges[0],
+          revenueRange: `$${(searchParams.revenue_range.min / 1000000).toFixed(0)}M-$${(searchParams.revenue_range.max / 1000000).toFixed(0)}M`,
+          locations: searchParams.organization_locations.length,
+          excludedTypes: searchParams.q_organization_not_keyword_tags.length,
+        },
       }));
     } catch (error) {
       logger.error({ error, body: req.body }, 'Error importing from Apollo');
