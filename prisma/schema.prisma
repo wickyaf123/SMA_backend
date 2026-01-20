@@ -54,6 +54,7 @@ model Contact {
   companyId             String?
   status                ContactStatus         @default(NEW)
   emailValidationStatus EmailValidationStatus @default(PENDING)
+  emailValidationAttempts Int                 @default(0)
   phoneValidationStatus PhoneValidationStatus @default(PENDING)
   emailValidatedAt      DateTime?             @db.Timestamptz(6)
   phoneValidatedAt      DateTime?             @db.Timestamptz(6)

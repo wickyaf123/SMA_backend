@@ -14,48 +14,101 @@ export class EmailValidationService {
    */
   public async validateContactEmail(contactId: string): Promise<EmailValidationStatus> {
     try {
-      // Get contact
+      // Get contact with current attempt count
       const contact = await prisma.contact.findUnique({
         where: { id: contactId },
-        select: { id: true, email: true },
+        select: { 
+          id: true, 
+          email: true, 
+          emailValidationAttempts: true 
+        },
       });
 
       if (!contact) {
         throw new Error(`Contact ${contactId} not found`);
       }
 
-      logger.info({ contactId, email: contact.email }, 'Validating contact email');
+      // Increment attempts counter
+      const attempts = (contact.emailValidationAttempts || 0) + 1;
 
-      // Validate email
-      const result = await neverBounceClient.verifyEmail(contact.email, {
-        address_info: true,
-        credits_info: false,
-      });
+      logger.info({ 
+        contactId, 
+        email: contact.email, 
+        attempt: attempts 
+      }, 'Validating contact email');
 
-      // Map result to database status
-      const status = this.mapResultToStatus(result);
+      try {
+        // Validate email
+        const result = await neverBounceClient.verifyEmail(contact.email, {
+          address_info: true,
+          credits_info: false,
+        });
 
-      // Update contact
-      await prisma.contact.update({
-        where: { id: contactId },
-        data: {
-          emailValidationStatus: status,
-          emailValidatedAt: new Date(),
-          // Update email to normalized version if available
-          ...(result.normalizedEmail && { email: result.normalizedEmail }),
-          // Update status if invalid
-          ...(status === 'INVALID' && { status: 'INVALID' }),
-        },
-      });
+        // Map result to database status
+        const status = this.mapResultToStatus(result);
 
-      logger.info({
-        contactId,
-        email: contact.email,
-        validationStatus: status,
-        isValid: result.isValid,
-      }, 'Contact email validation complete');
+        // Update contact with successful validation
+        await prisma.contact.update({
+          where: { id: contactId },
+          data: {
+            emailValidationStatus: status,
+            emailValidationAttempts: attempts,
+            emailValidatedAt: new Date(),
+            // Update email to normalized version if available
+            ...(result.normalizedEmail && { email: result.normalizedEmail }),
+            // Note: We do NOT set status: 'INVALID' to allow SMS enrollment
+          },
+        });
 
-      return status;
+        logger.info({
+          contactId,
+          email: contact.email,
+          validationStatus: status,
+          isValid: result.isValid,
+          attempts,
+        }, 'Contact email validation complete');
+
+        return status;
+      } catch (validationError: any) {
+        // If we've exhausted retries (3 attempts), mark email as INVALID
+        if (attempts >= 3) {
+          await prisma.contact.update({
+            where: { id: contactId },
+            data: {
+              emailValidationStatus: 'INVALID',
+              emailValidationAttempts: attempts,
+              emailValidatedAt: new Date(),
+              // Note: We do NOT set status: 'INVALID' so contact can still be enrolled in SMS campaigns
+            },
+          });
+          
+          logger.error({
+            contactId,
+            email: contact.email,
+            attempts,
+            error: validationError.message,
+          }, 'Email validation failed after max attempts - marked email as INVALID');
+
+          return EmailValidationStatus.INVALID;
+        }
+
+        // Update attempt count but keep PENDING status for retry
+        await prisma.contact.update({
+          where: { id: contactId },
+          data: {
+            emailValidationAttempts: attempts,
+          },
+        });
+
+        logger.warn({
+          contactId,
+          email: contact.email,
+          attempts,
+          error: validationError.message,
+        }, `Email validation attempt ${attempts} failed, will retry`);
+
+        throw validationError;
+      }
     } catch (error) {
       logger.error({
         contactId,
