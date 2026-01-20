@@ -31,6 +31,12 @@ router.get(
   routingController.getFilterOptions.bind(routingController)
 );
 
+// Get example contacts for testing routing
+router.get(
+  '/routing-rules/example-contacts',
+  routingController.getExampleContacts.bind(routingController)
+);
+
 // Reorder routing rules (bulk priority update)
 router.post(
   '/routing-rules/reorder',

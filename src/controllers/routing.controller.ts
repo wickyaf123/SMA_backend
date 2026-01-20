@@ -200,6 +200,27 @@ export class RoutingController {
       next(error);
     }
   }
+
+  /**
+   * Get example contacts for testing routing
+   * GET /campaigns/routing-rules/example-contacts
+   */
+  async getExampleContacts(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { limit = '10' } = req.query;
+      
+      const contacts = await campaignRoutingService.getExampleContacts(
+        parseInt(limit as string, 10)
+      );
+      
+      res.json({
+        success: true,
+        data: contacts,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export const routingController = new RoutingController();

@@ -468,7 +468,8 @@ export class CampaignRoutingService {
 
   /**
    * Get available filter options for the UI
-   * Returns distinct values from the database for dropdowns
+   * Returns predefined common values merged with distinct values from the database
+   * This allows users to create routing rules before importing contacts
    */
   async getFilterOptions(): Promise<{
     sources: string[];
@@ -477,6 +478,39 @@ export class CampaignRoutingService {
     countries: string[];
     tags: string[];
   }> {
+    // Predefined sources (all available integration types)
+    const predefinedSources = ['apollo', 'google_maps', 'manual', 'csv', 'scraper'];
+    
+    // Predefined industries (contractor-focused)
+    const predefinedIndustries = [
+      'HVAC',
+      'Solar',
+      'Roofing',
+      'Plumbing',
+      'Electrical',
+      'Construction',
+      'General Contractor',
+      'Home Improvement',
+      'Remodeling',
+    ];
+    
+    // All 50 US states
+    const predefinedStates = [
+      'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California',
+      'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia',
+      'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa',
+      'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland',
+      'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri',
+      'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey',
+      'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio',
+      'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina',
+      'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont',
+      'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming',
+    ];
+    
+    // Common countries
+    const predefinedCountries = ['United States', 'Canada', 'Mexico'];
+
     // Get distinct sources from contacts
     const sourcesResult = await prisma.contact.findMany({
       where: { source: { not: null } },
@@ -513,13 +547,57 @@ export class CampaignRoutingService {
     const allTags = new Set<string>();
     contactsWithTags.forEach((c) => c.tags.forEach((t) => allTags.add(t)));
 
+    // Merge predefined values with database values (deduplicate with Set)
+    const dbSources = sourcesResult.map((r) => r.source!).filter(Boolean);
+    const dbIndustries = industriesResult.map((r) => r.industry!).filter(Boolean);
+    const dbStates = statesResult.map((r) => r.state!).filter(Boolean);
+    const dbCountries = countriesResult.map((r) => r.country!).filter(Boolean);
+
     return {
-      sources: sourcesResult.map((r) => r.source!).filter(Boolean).sort(),
-      industries: industriesResult.map((r) => r.industry!).filter(Boolean).sort(),
-      states: statesResult.map((r) => r.state!).filter(Boolean).sort(),
-      countries: countriesResult.map((r) => r.country!).filter(Boolean).sort(),
-      tags: Array.from(allTags).sort(),
+      sources: Array.from(new Set([...predefinedSources, ...dbSources])).sort(),
+      industries: Array.from(new Set([...predefinedIndustries, ...dbIndustries])).sort(),
+      states: Array.from(new Set([...predefinedStates, ...dbStates])).sort(),
+      countries: Array.from(new Set([...predefinedCountries, ...dbCountries])).sort(),
+      tags: Array.from(allTags).sort(), // Tags remain database-only (user-defined)
     };
+  }
+
+  /**
+   * Get example contacts for testing routing
+   * Returns a diverse set of contacts with different attributes
+   */
+  async getExampleContacts(limit: number = 10): Promise<Array<{
+    id: string;
+    label: string;
+    email: string;
+    source: string | null;
+    industry: string | null;
+    state: string | null;
+    country: string | null;
+    tags: string[];
+  }>> {
+    const contacts = await prisma.contact.findMany({
+      take: limit,
+      include: { company: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    
+    return contacts.map(contact => {
+      const displayName = contact.fullName || contact.email;
+      const companyName = contact.company?.name || 'No Company';
+      const location = contact.state || 'Unknown State';
+      
+      return {
+        id: contact.id,
+        label: `${displayName} - ${companyName} (${location})`,
+        email: contact.email,
+        source: contact.source,
+        industry: contact.company?.industry || null,
+        state: contact.state,
+        country: contact.country,
+        tags: contact.tags,
+      };
+    });
   }
 }
 

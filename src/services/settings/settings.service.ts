@@ -592,12 +592,17 @@ export class SettingsService {
   /**
    * Get all scraper settings
    */
-  async getScraperSettings(): Promise<{ apify: ApifyScraperSettings; apollo: ApolloScraperSettings }> {
-    const [apify, apollo] = await Promise.all([
-      this.getApifySettings(),
-      this.getApolloSettings(),
-    ]);
-    return { apify, apollo };
+  async getScraperSettings(): Promise<{ apify: ApifyScraperSettings | null; apollo: ApolloScraperSettings | null }> {
+    try {
+      const [apify, apollo] = await Promise.all([
+        this.getApifySettings().catch(() => null),
+        this.getApolloSettings().catch(() => null),
+      ]);
+      return { apify, apollo };
+    } catch (error) {
+      logger.warn('Failed to get scraper settings, returning null values');
+      return { apify: null, apollo: null };
+    }
   }
 
   // ==================== PIPELINE CONTROL ====================

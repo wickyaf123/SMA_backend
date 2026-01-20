@@ -54,7 +54,7 @@ export class ScrapeJob {
       }
 
       // Fetch settings from database (no defaults)
-      const apifySettings = await settingsService.getApifySettings();
+        const apifySettings = await settingsService.getApifySettings();
       
       // Use settings (throw error if missing, don't use fallback defaults)
       const finalConfig = {
@@ -62,11 +62,11 @@ export class ScrapeJob {
         locations: apifySettings.locations,
         industries: apifySettings.industries,
         maxResults: apifySettings.maxResults,
-        minRating: apifySettings.minRating,
-        requirePhone: apifySettings.requirePhone,
-        requireWebsite: apifySettings.requireWebsite,
-        skipClosed: apifySettings.skipClosed,
-      };
+          minRating: apifySettings.minRating,
+          requirePhone: apifySettings.requirePhone,
+          requireWebsite: apifySettings.requireWebsite,
+          skipClosed: apifySettings.skipClosed,
+        };
 
       logger.info({ config: finalConfig }, 'Starting scrape job with settings from database');
 

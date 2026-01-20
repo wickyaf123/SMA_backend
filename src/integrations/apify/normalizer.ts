@@ -72,7 +72,7 @@ export function normalizeApifyListing(
     // Website and domain
     const website = listing.website;
     const domain = extractDomain(website);
-    
+
     // Extract email from Apify scraping (if scrapeContacts was enabled)
     const email = extractEmailFromListing(listing);
     
