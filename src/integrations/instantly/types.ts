@@ -138,11 +138,12 @@ export interface InstantlyConfig {
 
 /**
  * Instantly Campaign (from API)
+ * Status codes: -1 = Paused (but active), 0 = Draft, 1 = Active, 3 = Completed
  */
 export interface InstantlyCampaign {
   id: string;
   name: string;
-  status: string;
+  status: string | number;  // Can be string ('active') or number (-1, 0, 1, 3)
   created_at?: string;
   updated_at?: string;
 }

@@ -497,26 +497,40 @@ export class CampaignService {
         });
 
         if (existing) {
-          // Update name if changed
-          if (existing.name !== ic.name) {
+          // Update name and status if changed
+          // Instantly status codes: -1 = Paused (but active), 0 = Draft, 1 = Active, 3 = Completed
+          const isActive = ic.status === 1 || ic.status === -1 || ic.status === 'active';
+          const newStatus = isActive ? 'ACTIVE' : 'DRAFT';
+          
+          if (existing.name !== ic.name || existing.status !== newStatus) {
             const updatedCampaign = await prisma.campaign.update({
               where: { id: existing.id },
-              data: { name: ic.name },
+              data: { 
+                name: ic.name,
+                status: newStatus,
+              },
             });
             campaigns.push(updatedCampaign);
             updated++;
-            logger.info({ campaignId: existing.id, name: ic.name }, 'Updated campaign from Instantly');
+            logger.info({ 
+              campaignId: existing.id, 
+              name: ic.name, 
+              oldStatus: existing.status, 
+              newStatus 
+            }, 'Updated campaign from Instantly');
           } else {
             campaigns.push(existing);
           }
         } else {
           // Create new campaign
+          // Instantly status codes: -1 = Paused (but active), 0 = Draft, 1 = Active, 3 = Completed
+          const isActive = ic.status === 1 || ic.status === -1 || ic.status === 'active';
           const newCampaign = await prisma.campaign.create({
             data: {
               name: ic.name,
               channel: 'EMAIL',
               instantlyCampaignId: ic.id,
-              status: ic.status === 'active' ? 'ACTIVE' : 'DRAFT',
+              status: isActive ? 'ACTIVE' : 'DRAFT',
               description: `Synced from Instantly`,
             },
           });
