@@ -54,7 +54,7 @@ export const contactSearchSchema = z.object({
   createdFrom: z.string().datetime().optional(),
   createdTo: z.string().datetime().optional(),
   page: z.number().int().positive().optional().default(1),
-  limit: z.number().int().positive().max(100).optional().default(50),
+  limit: z.number().int().positive().max(1000).optional().default(50),
   sort: z.string().optional().default('createdAt'),
   order: z.enum(['asc', 'desc']).optional().default('desc'),
 });
