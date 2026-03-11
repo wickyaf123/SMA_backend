@@ -110,7 +110,7 @@ export class DailyMetricsService {
    * Mark job as executed for today
    */
   async markJobExecuted(
-    job: 'scrapeJobRan' | 'enrichJobRan' | 'mergeJobRan' | 'validateJobRan' | 'enrollJobRan' | 'apolloJobRan'
+    job: 'scrapeJobRan' | 'enrichJobRan' | 'mergeJobRan' | 'validateJobRan' | 'enrollJobRan' | 'apolloJobRan' | 'shovelsJobRan'
   ): Promise<void> {
     const today = this.getTodayDate();
 

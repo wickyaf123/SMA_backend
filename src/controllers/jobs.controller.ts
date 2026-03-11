@@ -5,7 +5,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { scrapeJob } from '../jobs/scrape.job';
+import { shovelsScraperJob } from '../jobs/shovels-scrape.job';
 import { enrichJob } from '../jobs/enrich.job';
 import { mergeJob } from '../jobs/merge.job';
 import { validateJob } from '../jobs/validate.job';
@@ -22,22 +22,11 @@ export class JobsController {
    */
   async triggerScrape(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { query, maxResults, location } = req.body;
+      logger.info('Manually triggering Shovels scrape job');
 
-      logger.info({ query, maxResults, location }, 'Manually triggering scrape job');
+      const jobId = await jobLogService.startJob('SHOVELS_SCRAPE', { manual: true, ...req.body });
 
-      const jobId = await jobLogService.startJob('SCRAPE', { manual: true, ...req.body });
-
-      // Use database settings if no params provided
-      const result = await scrapeJob.run(
-        query || maxResults || location
-          ? {
-              query: query || undefined,
-              maxResults: maxResults || undefined,
-              location: location || undefined,
-            }
-          : { useSettings: true }
-      );
+      const result = await shovelsScraperJob.run({ useSettings: true });
 
       if (result.success) {
         await jobLogService.completeJob(jobId, {

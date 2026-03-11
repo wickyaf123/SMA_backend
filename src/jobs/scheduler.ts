@@ -5,12 +5,11 @@
  */
 
 import * as cron from 'node-cron';
-import { scrapeJob } from './scrape.job';
 import { enrichJob } from './enrich.job';
 import { mergeJob } from './merge.job';
 import { validateJob } from './validate.job';
 import { autoEnrollJob } from './auto-enroll.job';
-import { apolloScrapeJob } from './apollo-scrape.job';
+import { shovelsScraperJob } from './shovels-scrape.job';
 import { jobLogService } from '../services/job-log.service';
 import { settingsService } from '../services/settings/settings.service';
 import { errorNotifier } from './error-notifier';
@@ -43,22 +42,13 @@ export class JobScheduler {
       const schedules = await settingsService.getCronSchedules();
       
       // Schedule each job
-      await this.scheduleJob('scrape', schedules.scrape, 'SCRAPE', async () => {
-        const enabled = await settingsService.isJobEnabled('scrape');
+      await this.scheduleJob('shovels', schedules.shovels, 'SHOVELS_SCRAPE', async () => {
+        const enabled = await settingsService.isJobEnabled('shovels');
         if (!enabled) {
-          logger.info('Scrape job skipped - disabled in settings');
+          logger.info('Shovels job skipped - disabled in settings');
           return { success: true, skipped: true };
         }
-        return await scrapeJob.run({ useSettings: true });
-      });
-
-      await this.scheduleJob('apollo', schedules.apollo, 'APOLLO_SCRAPE', async () => {
-        const enabled = await settingsService.isJobEnabled('apollo');
-        if (!enabled) {
-          logger.info('Apollo job skipped - disabled in settings');
-          return { success: true, skipped: true };
-        }
-        return await apolloScrapeJob.run({ industry: 'all' });
+        return await shovelsScraperJob.run({ useSettings: true });
       });
 
       await this.scheduleJob('enrich', schedules.enrich, 'ENRICH', async () => {
@@ -282,7 +272,7 @@ export class JobScheduler {
    * Can optionally use queue for async processing
    */
   async triggerJob(
-    jobName: 'scrape' | 'apollo' | 'enrich' | 'merge' | 'validate' | 'enroll',
+    jobName: 'shovels' | 'enrich' | 'merge' | 'validate' | 'enroll',
     options?: { useQueue?: boolean }
   ): Promise<any> {
     logger.info({ jobName, useQueue: options?.useQueue }, 'Manually triggering job');
@@ -294,10 +284,8 @@ export class JobScheduler {
 
     // Direct execution (synchronous)
     switch (jobName) {
-      case 'scrape':
-        return await scrapeJob.run({ useSettings: true });
-      case 'apollo':
-        return await apolloScrapeJob.run({ industry: 'all' });
+      case 'shovels':
+        return await shovelsScraperJob.run({ useSettings: true });
       case 'enrich':
         return await enrichJob.run({ batchSize: 50, onlyNew: true });
       case 'merge':
@@ -316,21 +304,14 @@ export class JobScheduler {
    * Returns immediately with job ID
    */
   async addJobToQueue(
-    jobName: 'scrape' | 'apollo' | 'enrich' | 'merge' | 'validate' | 'enroll'
+    jobName: 'shovels' | 'enrich' | 'merge' | 'validate' | 'enroll'
   ): Promise<{ queued: true; jobId: string }> {
     let job;
 
     switch (jobName) {
-      case 'scrape':
-        job = await scraperQueue.add('google-maps', {
-          type: 'google-maps',
-          config: { useSettings: true },
-        });
-        break;
-
-      case 'apollo':
-        job = await scraperQueue.add('apollo', {
-          type: 'apollo',
+      case 'shovels':
+        job = await scraperQueue.add('shovels', {
+          type: 'shovels',
           config: { useSettings: true },
         });
         break;

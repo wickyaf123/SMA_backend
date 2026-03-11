@@ -7,9 +7,9 @@ import { Job } from 'bullmq';
 import { prisma } from '../../config/database';
 import { emailValidationService } from '../../services/validation/email.service';
 import { phoneValidationService } from '../../services/validation/phone.service';
-import { HunterEnrichmentService } from '../../services/enrichment/hunter.service';
+import { ClayEnrichmentService } from '../../services/enrichment/clay.service';
 
-const hunterService = new HunterEnrichmentService();
+const clayService = new ClayEnrichmentService();
 import { deduplicationService } from '../../services/lead/deduplication.service';
 import { contactAutoMerger } from '../../services/merger/contact-auto-merger.service';
 import { realtimeEmitter } from '../../services/realtime/event-emitter.service';
@@ -190,7 +190,7 @@ async function processEnrichment(
     // Get contacts that need enrichment
     const contacts = await prisma.contact.findMany({
       where: {
-        hunterEnrichedAt: null,
+        clayEnrichedAt: null,
         emailValidationStatus: 'VALID',
       },
       take: 50,
@@ -229,7 +229,7 @@ async function processEnrichment(
       }
 
       // Enrich with Hunter
-      const result = await hunterService.enrichContact(id);
+      const result = await clayService.enrichContact(id);
       
       if (result.success) {
         enriched++;
@@ -237,8 +237,8 @@ async function processEnrichment(
           contactId: id,
           email: result.email,
           fullName: contact.fullName || undefined,
-          action: 'hunter_enriched',
-          details: { confidence: result.confidence },
+          action: 'clay_enriched',
+          details: {},
         });
       }
     } catch (e: any) {
@@ -360,14 +360,14 @@ async function processFullPipeline(
   await job.updateProgress(60);
   if (updatedContact?.emailValidationStatus === 'VALID') {
     try {
-      const enrichResult = await hunterService.enrichContact(contactId);
+      const enrichResult = await clayService.enrichContact(contactId);
       results.enriched = enrichResult.success;
       if (results.enriched) {
         realtimeEmitter.emitContactEnriched({
           contactId,
           email: enrichResult.email || contact.email || undefined,
           fullName: contact.fullName || undefined,
-          action: 'hunter_enriched',
+          action: 'clay_enriched',
         });
       }
     } catch (e) {

@@ -11,81 +11,6 @@ import { SCHEDULE_TEMPLATES, getScheduleTemplate, cronToHuman, isValidCron, type
 
 const DEFAULT_SETTINGS_ID = 'default';
 
-export interface Settings {
-  id: string;
-  linkedinGloballyEnabled: boolean;
-  defaultEmailCampaignId: string | null;
-  defaultSmsCampaignId: string | null;
-  // Apify (Google Maps) Scraper Settings - Expanded
-  apifySearchTerms: string[];
-  apifyLocations: string[];
-  apifyIndustries: string[];
-  apifyMaxResults: number | null;
-  apifyMinRating: number | null;
-  apifyRequirePhone: boolean | null;
-  apifyRequireWebsite: boolean | null;
-  apifySkipClosed: boolean | null;
-  apifyLanguage: string | null;
-  apifySearchMatching: string | null;
-  apifyScrapePlaceDetails: boolean | null;
-  apifyScrapeContacts: boolean | null;
-  apifyScrapeReviews: boolean | null;
-  apifyMaxReviews: number | null;
-  apifyScrapeSocialMedia: any | null;
-  apifyMinReviewCount: number | null;
-  // Apollo Scraper Settings - Expanded
-  apolloIndustry: string | null;
-  apolloPersonTitles: string[];
-  apolloLocations: string[];
-  apolloExcludeLocations: string[];
-  apolloEmployeesMin: number | null;
-  apolloEmployeesMax: number | null;
-  apolloRevenueMin: number | null;
-  apolloRevenueMax: number | null;
-  apolloEnrichLimit: number | null;
-  apolloEnrichPhones: boolean;
-  apolloSearchKeywords: string | null;
-  apolloPersonLocations: string[];
-  apolloPersonSeniorities: string[];
-  apolloOrganizationKeywordTags: string[];
-  apolloNegativeKeywordTags: string[];
-  apolloTechnologies: string[];
-  apolloIndustryTagIds: string[];
-  apolloEmployeeGrowthRate: string | null;
-  apolloFundingStage: string | null;
-  apolloPage: number | null;
-  apolloPerPage: number | null;
-  // Pipeline Control
-  pipelineEnabled: boolean | null;
-  emailOutreachEnabled: boolean | null;
-  smsOutreachEnabled: boolean | null;
-  maintenanceMode: boolean | null;
-  maintenanceMessage: string | null;
-  // Job Controls
-  schedulerEnabled: boolean | null;
-  scrapeJobEnabled: boolean | null;
-  apolloJobEnabled: boolean | null;
-  enrichJobEnabled: boolean | null;
-  mergeJobEnabled: boolean | null;
-  validateJobEnabled: boolean | null;
-  enrollJobEnabled: boolean | null;
-  // Cron Schedules
-  scheduleTemplate: string | null;
-  scrapeJobCron: string | null;
-  apolloJobCron: string | null;
-  enrichJobCron: string | null;
-  mergeJobCron: string | null;
-  validateJobCron: string | null;
-  enrollJobCron: string | null;
-  // Emergency Stop
-  lastEmergencyStopAt: Date | null;
-  lastEmergencyStopBy: string | null;
-  // Campaign Routing
-  routingFallbackBehavior: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
 export interface PipelineControlSettings {
   pipelineEnabled: boolean;
   emailOutreachEnabled: boolean;
@@ -94,8 +19,7 @@ export interface PipelineControlSettings {
   maintenanceMode: boolean;
   maintenanceMessage: string | null;
   schedulerEnabled: boolean;
-  scrapeJobEnabled: boolean;
-  apolloJobEnabled: boolean;
+  shovelsJobEnabled: boolean;
   enrichJobEnabled: boolean;
   mergeJobEnabled: boolean;
   validateJobEnabled: boolean;
@@ -106,8 +30,7 @@ export interface PipelineControlSettings {
 
 export interface ScheduleSettings {
   scheduleTemplate: string;
-  scrapeJobCron: string;
-  apolloJobCron: string;
+  shovelsJobCron: string;
   enrichJobCron: string;
   mergeJobCron: string;
   validateJobCron: string;
@@ -119,10 +42,9 @@ export interface ScheduleSettingsWithMeta extends ScheduleSettings {
   templateDescription: string | null;
   templateIcon: string | null;
   targetLeads: number | null;
-  estimatedCosts: { apollo: string; apify: string } | null;
+  estimatedCosts: { shovels: string } | null;
   scheduleDescriptions: {
-    scrape: string;
-    apollo: string;
+    shovels: string;
     enrich: string;
     merge: string;
     validate: string;
@@ -136,54 +58,28 @@ export interface UpdateSettingsData {
   defaultSmsCampaignId?: string | null;
 }
 
-export interface ApifyScraperSettings {
-  searchTerms: string[];
-  locations: string[];
-  industries: string[];
-  maxResults: number;
-  minRating: number;
-  requirePhone: boolean;
-  requireWebsite: boolean;
-  skipClosed: boolean;
-  language?: string;
-  searchMatching?: 'all' | 'exact';
-  scrapePlaceDetails?: boolean;
-  scrapeContacts?: boolean;
-  scrapeReviews?: boolean;
-  maxReviews?: number;
-  scrapeSocialMedia?: any;
-  minReviewCount?: number;
+export interface EmployeeFilterSettings {
+  seniorityFilter: string[];
+  departmentFilter: string[];
+  titleInclude: string[];
+  titleExclude: string[];
 }
 
-export interface ApolloScraperSettings {
-  industry: string;
-  personTitles: string[];
+export interface ShovelsScraperSettings {
+  permitTypes: string[];
+  geoIds: string[];
   locations: string[];
-  excludeLocations: string[];
-  employeesMin: number | null;
-  employeesMax: number | null;
-  revenueMin: number | null;
-  revenueMax: number | null;
-  enrichLimit: number;
-  enrichPhones: boolean;
-  searchKeywords?: string;
-  personLocations?: string[];
-  personSeniorities?: string[];
-  organizationKeywordTags?: string[];
-  negativeKeywordTags?: string[];
-  technologies?: string[];
-  industryTagIds?: string[];
-  employeeGrowthRate?: string;
-  fundingStage?: string;
-  page?: number;
-  perPage?: number;
+  dateRangeDays: number;
+  maxResults: number;
+  enableEmployees: boolean;
+  employeeFilter: EmployeeFilterSettings;
 }
 
 export class SettingsService {
   /**
    * Get global settings (creates default if not exists)
    */
-  async getSettings(): Promise<Settings> {
+  async getSettings() {
     try {
       let settings = await prisma.settings.findUnique({
         where: { id: DEFAULT_SETTINGS_ID },
@@ -206,14 +102,9 @@ export class SettingsService {
     }
   }
 
-  /**
-   * Update global settings
-   */
-  async updateSettings(data: UpdateSettingsData): Promise<Settings> {
+  async updateSettings(data: UpdateSettingsData) {
     try {
       logger.info({ updates: Object.keys(data) }, 'Updating settings');
-
-      // Ensure settings exist first
       await this.getSettings();
 
       const settings = await prisma.settings.update({
@@ -243,7 +134,7 @@ export class SettingsService {
   /**
    * Enable LinkedIn globally
    */
-  async enableLinkedIn(): Promise<Settings> {
+  async enableLinkedIn() {
     logger.info('Enabling LinkedIn globally');
     return this.updateSettings({ linkedinGloballyEnabled: true });
   }
@@ -251,7 +142,7 @@ export class SettingsService {
   /**
    * Disable LinkedIn globally
    */
-  async disableLinkedIn(): Promise<Settings> {
+  async disableLinkedIn() {
     logger.warn('Disabling LinkedIn globally');
     return this.updateSettings({ linkedinGloballyEnabled: false });
   }
@@ -296,7 +187,7 @@ export class SettingsService {
   /**
    * Set default email campaign for auto-enrollment
    */
-  async setDefaultEmailCampaign(campaignId: string): Promise<Settings> {
+  async setDefaultEmailCampaign(campaignId: string) {
     try {
       // Verify campaign exists and is EMAIL type
       const campaign = await prisma.campaign.findUnique({
@@ -325,7 +216,7 @@ export class SettingsService {
   /**
    * Set default SMS campaign for auto-enrollment
    */
-  async setDefaultSmsCampaign(campaignId: string): Promise<Settings> {
+  async setDefaultSmsCampaign(campaignId: string) {
     try {
       // Verify campaign exists and is SMS type
       const campaign = await prisma.campaign.findUnique({
@@ -364,244 +255,84 @@ export class SettingsService {
 
   // ==================== SCRAPER CONFIGURATION ====================
 
-  /**
-   * Check if Apify (Google Maps) scraper is configured
-   */
-  async isApifyConfigured(): Promise<boolean> {
+  async isShovelsConfigured(): Promise<boolean> {
     const settings = await this.getSettings();
     return !!(
-      settings.apifySearchTerms && settings.apifySearchTerms.length > 0 &&
-      settings.apifyLocations && settings.apifyLocations.length > 0 &&
-      settings.apifyIndustries && settings.apifyIndustries.length > 0 &&
-      settings.apifyMaxResults
+      settings.shovelsPermitTypes?.length > 0 &&
+      settings.shovelsGeoIds?.length > 0
     );
   }
 
-  /**
-   * Get Apify (Google Maps) scraper settings
-   * Throws error if not properly configured
-   */
-  async getApifySettings(): Promise<ApifyScraperSettings> {
+  async getShovelsSettings(): Promise<ShovelsScraperSettings> {
     const settings = await this.getSettings();
-    
-    // Validate required fields
-    if (!settings.apifySearchTerms || settings.apifySearchTerms.length === 0) {
+    if (!settings.shovelsPermitTypes || settings.shovelsPermitTypes.length === 0) {
       throw new AppError(
-        'Google Maps scraper not configured: Search terms are required',
+        'Shovels scraper not configured: Permit types required',
         400,
-        'APIFY_NOT_CONFIGURED'
+        'SHOVELS_NOT_CONFIGURED'
       );
     }
-    
-    if (!settings.apifyLocations || settings.apifyLocations.length === 0) {
+    if (!settings.shovelsGeoIds || settings.shovelsGeoIds.length === 0) {
       throw new AppError(
-        'Google Maps scraper not configured: Locations are required',
+        'Shovels scraper not configured: Geo IDs required',
         400,
-        'APIFY_NOT_CONFIGURED'
+        'SHOVELS_NOT_CONFIGURED'
       );
     }
-    
-    if (!settings.apifyIndustries || settings.apifyIndustries.length === 0) {
-      throw new AppError(
-        'Google Maps scraper not configured: Industries are required',
-        400,
-        'APIFY_NOT_CONFIGURED'
-      );
-    }
-
-    if (!settings.apifyMaxResults) {
-      throw new AppError(
-        'Google Maps scraper not configured: Max results is required',
-        400,
-        'APIFY_NOT_CONFIGURED'
-      );
-    }
-    
-    // Return all settings
     return {
-      searchTerms: settings.apifySearchTerms,
-      locations: settings.apifyLocations,
-      industries: settings.apifyIndustries,
-      maxResults: settings.apifyMaxResults,
-      minRating: settings.apifyMinRating ?? 0,
-      requirePhone: settings.apifyRequirePhone ?? false,
-      requireWebsite: settings.apifyRequireWebsite ?? false,
-      skipClosed: settings.apifySkipClosed ?? true,
-      language: settings.apifyLanguage ?? undefined,
-      searchMatching: settings.apifySearchMatching as 'all' | 'exact' | undefined,
-      scrapePlaceDetails: settings.apifyScrapePlaceDetails ?? undefined,
-      scrapeContacts: settings.apifyScrapeContacts ?? undefined,
-      scrapeReviews: settings.apifyScrapeReviews ?? undefined,
-      maxReviews: settings.apifyMaxReviews ?? undefined,
-      scrapeSocialMedia: settings.apifyScrapeSocialMedia ?? undefined,
-      minReviewCount: settings.apifyMinReviewCount ?? undefined,
+      permitTypes: settings.shovelsPermitTypes,
+      geoIds: settings.shovelsGeoIds,
+      locations: settings.shovelsLocations || [],
+      dateRangeDays: settings.shovelsDateRangeDays ?? 365,
+      maxResults: settings.shovelsMaxResults ?? 100,
+      enableEmployees: settings.shovelsEnableEmployees ?? true,
+      employeeFilter: {
+        seniorityFilter: settings.shovelsEmployeeSeniorityFilter || ['Senior', 'Executive'],
+        departmentFilter: settings.shovelsEmployeeDepartmentFilter || ['Operations', 'Management', 'Administration'],
+        titleInclude: settings.shovelsEmployeeTitleInclude || ['Owner', 'President', 'CEO', 'Founder', 'Director', 'VP', 'Vice President'],
+        titleExclude: settings.shovelsEmployeeTitleExclude || ['Technician', 'Installer', 'Helper', 'Laborer', 'Apprentice'],
+      },
     };
   }
 
-  /**
-   * Update Apify (Google Maps) scraper settings
-   */
-  async updateApifySettings(data: Partial<ApifyScraperSettings>): Promise<ApifyScraperSettings> {
+  async updateShovelsSettings(data: Partial<ShovelsScraperSettings>): Promise<ShovelsScraperSettings> {
     try {
-      logger.info({ updates: Object.keys(data) }, 'Updating Apify scraper settings');
-
+      logger.info({ updates: Object.keys(data) }, 'Updating Shovels scraper settings');
       await this.getSettings();
-
       await prisma.settings.update({
         where: { id: DEFAULT_SETTINGS_ID },
         data: {
-          apifySearchTerms: data.searchTerms,
-          apifyLocations: data.locations,
-          apifyIndustries: data.industries,
-          apifyMaxResults: data.maxResults,
-          apifyMinRating: data.minRating,
-          apifyRequirePhone: data.requirePhone,
-          apifyRequireWebsite: data.requireWebsite,
-          apifySkipClosed: data.skipClosed,
-          apifyLanguage: data.language,
-          apifySearchMatching: data.searchMatching,
-          apifyScrapePlaceDetails: data.scrapePlaceDetails,
-          apifyScrapeContacts: data.scrapeContacts,
-          apifyScrapeReviews: data.scrapeReviews,
-          apifyMaxReviews: data.maxReviews,
-          apifyScrapeSocialMedia: data.scrapeSocialMedia,
-          apifyMinReviewCount: data.minReviewCount,
+          shovelsPermitTypes: data.permitTypes,
+          shovelsGeoIds: data.geoIds,
+          shovelsLocations: data.locations,
+          shovelsDateRangeDays: data.dateRangeDays,
+          shovelsMaxResults: data.maxResults,
+          shovelsEnableEmployees: data.enableEmployees,
+          ...(data.employeeFilter && {
+            shovelsEmployeeSeniorityFilter: data.employeeFilter.seniorityFilter,
+            shovelsEmployeeDepartmentFilter: data.employeeFilter.departmentFilter,
+            shovelsEmployeeTitleInclude: data.employeeFilter.titleInclude,
+            shovelsEmployeeTitleExclude: data.employeeFilter.titleExclude,
+          }),
           updatedAt: new Date(),
         },
       });
-
-      logger.info('Apify settings updated successfully');
-      return this.getApifySettings();
+      logger.info('Shovels settings updated successfully');
+      return this.getShovelsSettings();
     } catch (error) {
       if (error instanceof AppError) throw error;
-      logger.error({ error, data }, 'Failed to update Apify settings');
-      throw new AppError('Failed to update Apify settings', 500, 'SETTINGS_UPDATE_ERROR');
+      logger.error({ error, data }, 'Failed to update Shovels settings');
+      throw new AppError('Failed to update Shovels settings', 500, 'SETTINGS_UPDATE_ERROR');
     }
   }
 
-  /**
-   * Check if Apollo scraper is configured
-   */
-  async isApolloConfigured(): Promise<boolean> {
-    const settings = await this.getSettings();
-    return !!(
-      settings.apolloIndustry &&
-      settings.apolloLocations && settings.apolloLocations.length > 0 &&
-      settings.apolloPersonTitles && settings.apolloPersonTitles.length > 0 &&
-      (settings.apolloSearchKeywords || settings.apolloOrganizationKeywordTags?.length > 0)
-    );
-  }
-
-  /**
-   * Get Apollo scraper settings
-   * Throws error if not properly configured
-   */
-  async getApolloSettings(): Promise<ApolloScraperSettings> {
-    const settings = await this.getSettings();
-    
-    // Validate required fields
-    const errors = [];
-    
-    if (!settings.apolloIndustry) errors.push('Industry');
-    if (!settings.apolloLocations || settings.apolloLocations.length === 0) errors.push('Locations');
-    if (!settings.apolloPersonTitles || settings.apolloPersonTitles.length === 0) errors.push('Person Titles');
-    if (!settings.apolloSearchKeywords && 
-        (!settings.apolloOrganizationKeywordTags || settings.apolloOrganizationKeywordTags.length === 0)) {
-      errors.push('Search Keywords or Organization Keyword Tags');
-    }
-    
-    if (errors.length > 0) {
-      throw new AppError(
-        `Apollo scraper not configured. Missing: ${errors.join(', ')}`,
-        400,
-        'APOLLO_NOT_CONFIGURED'
-      );
-    }
-    
-    return {
-      industry: settings.apolloIndustry!,
-      personTitles: settings.apolloPersonTitles,
-      locations: settings.apolloLocations,
-      excludeLocations: settings.apolloExcludeLocations || [],
-      employeesMin: settings.apolloEmployeesMin,
-      employeesMax: settings.apolloEmployeesMax,
-      revenueMin: settings.apolloRevenueMin,
-      revenueMax: settings.apolloRevenueMax,
-      enrichLimit: settings.apolloEnrichLimit ?? 100,
-      enrichPhones: settings.apolloEnrichPhones ?? true,
-      searchKeywords: settings.apolloSearchKeywords ?? undefined,
-      personLocations: settings.apolloPersonLocations || [],
-      personSeniorities: settings.apolloPersonSeniorities || [],
-      organizationKeywordTags: settings.apolloOrganizationKeywordTags || [],
-      negativeKeywordTags: settings.apolloNegativeKeywordTags || [],
-      technologies: settings.apolloTechnologies || [],
-      industryTagIds: settings.apolloIndustryTagIds || [],
-      employeeGrowthRate: settings.apolloEmployeeGrowthRate ?? undefined,
-      fundingStage: settings.apolloFundingStage ?? undefined,
-      page: settings.apolloPage ?? 1,
-      perPage: settings.apolloPerPage ?? 100,
-    };
-  }
-
-  /**
-   * Update Apollo scraper settings
-   */
-  async updateApolloSettings(data: Partial<ApolloScraperSettings>): Promise<ApolloScraperSettings> {
+  async getScraperSettings(): Promise<{ shovels: ShovelsScraperSettings | null }> {
     try {
-      logger.info({ updates: Object.keys(data) }, 'Updating Apollo scraper settings');
-
-      await this.getSettings();
-
-      await prisma.settings.update({
-        where: { id: DEFAULT_SETTINGS_ID },
-        data: {
-          apolloIndustry: data.industry,
-          apolloPersonTitles: data.personTitles,
-          apolloLocations: data.locations,
-          apolloExcludeLocations: data.excludeLocations,
-          apolloEmployeesMin: data.employeesMin,
-          apolloEmployeesMax: data.employeesMax,
-          apolloRevenueMin: data.revenueMin,
-          apolloRevenueMax: data.revenueMax,
-          apolloEnrichLimit: data.enrichLimit,
-          apolloEnrichPhones: data.enrichPhones,
-          apolloSearchKeywords: data.searchKeywords,
-          apolloPersonLocations: data.personLocations,
-          apolloPersonSeniorities: data.personSeniorities,
-          apolloOrganizationKeywordTags: data.organizationKeywordTags,
-          apolloNegativeKeywordTags: data.negativeKeywordTags,
-          apolloTechnologies: data.technologies,
-          apolloIndustryTagIds: data.industryTagIds,
-          apolloEmployeeGrowthRate: data.employeeGrowthRate,
-          apolloFundingStage: data.fundingStage,
-          apolloPage: data.page,
-          apolloPerPage: data.perPage,
-          updatedAt: new Date(),
-        },
-      });
-
-      logger.info('Apollo settings updated successfully');
-      return this.getApolloSettings();
-    } catch (error) {
-      if (error instanceof AppError) throw error;
-      logger.error({ error, data }, 'Failed to update Apollo settings');
-      throw new AppError('Failed to update Apollo settings', 500, 'SETTINGS_UPDATE_ERROR');
-    }
-  }
-
-  /**
-   * Get all scraper settings
-   */
-  async getScraperSettings(): Promise<{ apify: ApifyScraperSettings | null; apollo: ApolloScraperSettings | null }> {
-    try {
-      const [apify, apollo] = await Promise.all([
-        this.getApifySettings().catch(() => null),
-        this.getApolloSettings().catch(() => null),
-      ]);
-      return { apify, apollo };
+      const shovels = await this.getShovelsSettings().catch(() => null);
+      return { shovels };
     } catch (error) {
       logger.warn('Failed to get scraper settings, returning null values');
-      return { apify: null, apollo: null };
+      return { shovels: null };
     }
   }
 
@@ -620,8 +351,7 @@ export class SettingsService {
       maintenanceMode: settings.maintenanceMode ?? false,
       maintenanceMessage: settings.maintenanceMessage,
       schedulerEnabled: settings.schedulerEnabled ?? true,
-      scrapeJobEnabled: settings.scrapeJobEnabled ?? true,
-      apolloJobEnabled: settings.apolloJobEnabled ?? true,
+      shovelsJobEnabled: settings.shovelsJobEnabled ?? true,
       enrichJobEnabled: settings.enrichJobEnabled ?? true,
       mergeJobEnabled: settings.mergeJobEnabled ?? true,
       validateJobEnabled: settings.validateJobEnabled ?? true,
@@ -650,8 +380,7 @@ export class SettingsService {
           maintenanceMode: data.maintenanceMode,
           maintenanceMessage: data.maintenanceMessage,
           schedulerEnabled: data.schedulerEnabled,
-          scrapeJobEnabled: data.scrapeJobEnabled,
-          apolloJobEnabled: data.apolloJobEnabled,
+          shovelsJobEnabled: data.shovelsJobEnabled,
           enrichJobEnabled: data.enrichJobEnabled,
           mergeJobEnabled: data.mergeJobEnabled,
           validateJobEnabled: data.validateJobEnabled,
@@ -687,8 +416,7 @@ export class SettingsService {
 
     return {
       scheduleTemplate: templateId,
-      scrapeJobCron: settings.scrapeJobCron || '0 6 * * *',
-      apolloJobCron: settings.apolloJobCron || '30 6 * * *',
+      shovelsJobCron: settings.shovelsJobCron || '0 7 * * *',
       enrichJobCron: settings.enrichJobCron || '0 8 * * *',
       mergeJobCron: settings.mergeJobCron || '0 9 * * *',
       validateJobCron: settings.validateJobCron || '0 10 * * *',
@@ -699,8 +427,7 @@ export class SettingsService {
       targetLeads: template?.targetLeads || null,
       estimatedCosts: template?.estimatedCosts || null,
       scheduleDescriptions: {
-        scrape: cronToHuman(settings.scrapeJobCron || '0 6 * * *'),
-        apollo: cronToHuman(settings.apolloJobCron || '30 6 * * *'),
+        shovels: cronToHuman(settings.shovelsJobCron || '0 7 * * *'),
         enrich: cronToHuman(settings.enrichJobCron || '0 8 * * *'),
         merge: cronToHuman(settings.mergeJobCron || '0 9 * * *'),
         validate: cronToHuman(settings.validateJobCron || '0 10 * * *'),
@@ -727,8 +454,7 @@ export class SettingsService {
       where: { id: DEFAULT_SETTINGS_ID },
       data: {
         scheduleTemplate: templateId,
-        scrapeJobCron: template.schedules.scrapeJobCron,
-        apolloJobCron: template.schedules.apolloJobCron,
+        shovelsJobCron: template.schedules.shovelsJobCron,
         enrichJobCron: template.schedules.enrichJobCron,
         mergeJobCron: template.schedules.mergeJobCron,
         validateJobCron: template.schedules.validateJobCron,
@@ -747,7 +473,7 @@ export class SettingsService {
   async updateSchedules(data: Partial<ScheduleSettings>): Promise<ScheduleSettingsWithMeta> {
     try {
       // Validate cron expressions
-      const cronFields = ['scrapeJobCron', 'apolloJobCron', 'enrichJobCron', 'mergeJobCron', 'validateJobCron', 'enrollJobCron'] as const;
+      const cronFields = ['shovelsJobCron', 'enrichJobCron', 'mergeJobCron', 'validateJobCron', 'enrollJobCron'] as const;
       
       for (const field of cronFields) {
         if (data[field] && !isValidCron(data[field]!)) {
@@ -763,8 +489,7 @@ export class SettingsService {
         where: { id: DEFAULT_SETTINGS_ID },
         data: {
           scheduleTemplate: 'custom', // Mark as custom when manually editing
-          scrapeJobCron: data.scrapeJobCron,
-          apolloJobCron: data.apolloJobCron,
+          shovelsJobCron: data.shovelsJobCron,
           enrichJobCron: data.enrichJobCron,
           mergeJobCron: data.mergeJobCron,
           validateJobCron: data.validateJobCron,
@@ -788,8 +513,7 @@ export class SettingsService {
   async getCronSchedules(): Promise<Record<string, string>> {
     const settings = await this.getSettings();
     return {
-      scrape: settings.scrapeJobCron || '0 6 * * *',
-      apollo: settings.apolloJobCron || '30 6 * * *',
+      shovels: settings.shovelsJobCron || '0 7 * * *',
       enrich: settings.enrichJobCron || '0 8 * * *',
       merge: settings.mergeJobCron || '0 9 * * *',
       validate: settings.validateJobCron || '0 10 * * *',
@@ -813,6 +537,7 @@ export class SettingsService {
         smsOutreachEnabled: false,
         linkedinGloballyEnabled: false,
         enrollJobEnabled: false,
+        shovelsJobEnabled: false,
         lastEmergencyStopAt: new Date(),
         lastEmergencyStopBy: stoppedBy,
         updatedAt: new Date(),
@@ -838,12 +563,11 @@ export class SettingsService {
         emailOutreachEnabled: true,
         smsOutreachEnabled: true,
         schedulerEnabled: true,
-        scrapeJobEnabled: true,
-        apolloJobEnabled: true,
         enrichJobEnabled: true,
         mergeJobEnabled: true,
         validateJobEnabled: true,
         enrollJobEnabled: true,
+        shovelsJobEnabled: true,
         maintenanceMode: false,
         updatedAt: new Date(),
       },
@@ -856,19 +580,16 @@ export class SettingsService {
   /**
    * Check if a specific job is enabled
    */
-  async isJobEnabled(jobType: 'scrape' | 'apollo' | 'enrich' | 'merge' | 'validate' | 'enroll'): Promise<boolean> {
+  async isJobEnabled(jobType: 'shovels' | 'enrich' | 'merge' | 'validate' | 'enroll'): Promise<boolean> {
     const settings = await this.getSettings();
     
-    // Master switches first
     if (!settings.pipelineEnabled || !settings.schedulerEnabled) {
       return false;
     }
 
     switch (jobType) {
-      case 'scrape':
-        return settings.scrapeJobEnabled ?? true;
-      case 'apollo':
-        return settings.apolloJobEnabled ?? true;
+      case 'shovels':
+        return settings.shovelsJobEnabled ?? true;
       case 'enrich':
         return settings.enrichJobEnabled ?? true;
       case 'merge':
@@ -901,6 +622,53 @@ export class SettingsService {
         return settings.linkedinGloballyEnabled;
       default:
         return false;
+    }
+  }
+  // ==================== PERMIT ROUTING ====================
+
+  async getPermitRoutingSettings(): Promise<{
+    permitRouteMode: string;
+    permitEmailCampaignId: string | null;
+    permitGhlWorkflowId: string | null;
+    permitGhlEmailReplyWorkflowId: string | null;
+    permitGhlSmsReplyWorkflowId: string | null;
+    permitSmsFallbackEnabled: boolean;
+    permitAutoRouteEnabled: boolean;
+  }> {
+    const settings = await this.getSettings();
+    return {
+      permitRouteMode: (settings as any).permitRouteMode || 'email',
+      permitEmailCampaignId: (settings as any).permitEmailCampaignId || null,
+      permitGhlWorkflowId: (settings as any).permitGhlWorkflowId || null,
+      permitGhlEmailReplyWorkflowId: (settings as any).permitGhlEmailReplyWorkflowId || null,
+      permitGhlSmsReplyWorkflowId: (settings as any).permitGhlSmsReplyWorkflowId || null,
+      permitSmsFallbackEnabled: (settings as any).permitSmsFallbackEnabled ?? true,
+      permitAutoRouteEnabled: (settings as any).permitAutoRouteEnabled ?? false,
+    };
+  }
+
+  async updatePermitRoutingSettings(data: {
+    permitRouteMode?: string;
+    permitEmailCampaignId?: string;
+    permitGhlWorkflowId?: string;
+    permitGhlEmailReplyWorkflowId?: string;
+    permitGhlSmsReplyWorkflowId?: string;
+    permitSmsFallbackEnabled?: boolean;
+    permitAutoRouteEnabled?: boolean;
+  }): Promise<any> {
+    try {
+      logger.info({ updates: Object.keys(data) }, 'Updating permit routing settings');
+      await this.getSettings();
+      await prisma.settings.update({
+        where: { id: DEFAULT_SETTINGS_ID },
+        data: { ...data, updatedAt: new Date() },
+      });
+      logger.info('Permit routing settings updated');
+      return this.getPermitRoutingSettings();
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      logger.error({ error, data }, 'Failed to update permit routing settings');
+      throw new AppError('Failed to update permit routing settings', 500, 'SETTINGS_UPDATE_ERROR');
     }
   }
 }

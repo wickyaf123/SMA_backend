@@ -13,6 +13,7 @@ import metricsRoutes from './metrics.routes';
 import contractorRoutes from './contractor.routes';
 import scraperRoutes from './scraper.routes';
 import queueRoutes from './queue.routes';
+import permitRoutes from './permit.routes';
 import { authenticateApiKey } from '../middleware/auth';
 
 const router = Router();
@@ -62,6 +63,9 @@ router.use('/api/v1/scraper', authenticateApiKey, scraperRoutes);
 
 // Queue Management (protected)
 router.use('/api/v1/queues', authenticateApiKey, queueRoutes);
+
+// Permit Intelligence (protected)
+router.use('/api/v1/permits', authenticateApiKey, permitRoutes);
 
 // Additional routes will be added in future phases:
 // router.use('/dashboard', dashboardRoutes);     // Phase 6

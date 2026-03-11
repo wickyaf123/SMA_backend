@@ -11,16 +11,14 @@ export interface ScheduleTemplate {
   icon: string;
   targetLeads: number;
   schedules: {
-    scrapeJobCron: string;
-    apolloJobCron: string;
+    shovelsJobCron: string;
     enrichJobCron: string;
     mergeJobCron: string;
     validateJobCron: string;
     enrollJobCron: string;
   };
   estimatedCosts: {
-    apollo: string;
-    apify: string;
+    shovels: string;
   };
 }
 
@@ -33,16 +31,14 @@ export const SCHEDULE_TEMPLATES: Record<string, ScheduleTemplate> = {
     icon: '⚖️',
     targetLeads: 100,
     schedules: {
-      scrapeJobCron: '0 6 * * *',      // 6:00 AM
-      apolloJobCron: '30 6 * * *',     // 6:30 AM
+      shovelsJobCron: '0 6 * * *',     // 6:00 AM
       enrichJobCron: '0 8 * * *',      // 8:00 AM
       mergeJobCron: '0 9 * * *',       // 9:00 AM
       validateJobCron: '0 10 * * *',   // 10:00 AM
       enrollJobCron: '0 11 * * *',     // 11:00 AM
     },
     estimatedCosts: {
-      apollo: '~66 credits/day',
-      apify: '~$0.50/day',
+      shovels: '~$0.50/day',
     },
   },
 
@@ -54,16 +50,14 @@ export const SCHEDULE_TEMPLATES: Record<string, ScheduleTemplate> = {
     icon: '🚀',
     targetLeads: 200,
     schedules: {
-      scrapeJobCron: '0 6,14,22 * * *',     // 6 AM, 2 PM, 10 PM
-      apolloJobCron: '30 6,14,22 * * *',    // 6:30 AM, 2:30 PM, 10:30 PM
+      shovelsJobCron: '0 6,14,22 * * *',     // 6 AM, 2 PM, 10 PM
       enrichJobCron: '0 8,16,23 * * *',     // 8 AM, 4 PM, 11 PM
       mergeJobCron: '30 8,16,23 * * *',     // 8:30 AM, 4:30 PM, 11:30 PM
       validateJobCron: '0 9,17 * * *',      // 9 AM, 5 PM
       enrollJobCron: '30 9,17 * * *',       // 9:30 AM, 5:30 PM
     },
     estimatedCosts: {
-      apollo: '~130 credits/day (may hit monthly cap)',
-      apify: '~$1.50/day',
+      shovels: '~$1.50/day',
     },
   },
 
@@ -75,16 +69,14 @@ export const SCHEDULE_TEMPLATES: Record<string, ScheduleTemplate> = {
     icon: '🐢',
     targetLeads: 50,
     schedules: {
-      scrapeJobCron: '0 2 * * *',       // 2:00 AM
-      apolloJobCron: '30 2 * * *',      // 2:30 AM
+      shovelsJobCron: '0 2 * * *',       // 2:00 AM
       enrichJobCron: '0 3 * * *',       // 3:00 AM
       mergeJobCron: '0 4 * * *',        // 4:00 AM
       validateJobCron: '0 5 * * *',     // 5:00 AM
       enrollJobCron: '0 6 * * *',       // 6:00 AM
     },
     estimatedCosts: {
-      apollo: '~33 credits/day',
-      apify: '~$0.25/day',
+      shovels: '~$0.25/day',
     },
   },
 
@@ -96,16 +88,14 @@ export const SCHEDULE_TEMPLATES: Record<string, ScheduleTemplate> = {
     icon: '📅',
     targetLeads: 70,
     schedules: {
-      scrapeJobCron: '0 6 * * 1-5',     // 6 AM Mon-Fri
-      apolloJobCron: '30 6 * * 1-5',    // 6:30 AM Mon-Fri
+      shovelsJobCron: '0 6 * * 1-5',     // 6 AM Mon-Fri
       enrichJobCron: '0 8 * * 1-5',     // 8 AM Mon-Fri
       mergeJobCron: '0 9 * * 1-5',      // 9 AM Mon-Fri
       validateJobCron: '0 10 * * 1-5',  // 10 AM Mon-Fri
       enrollJobCron: '0 11 * * 1-5',    // 11 AM Mon-Fri
     },
     estimatedCosts: {
-      apollo: '~50 credits/day (weekdays only)',
-      apify: '~$0.35/day',
+      shovels: '~$0.35/day',
     },
   },
 
@@ -117,16 +107,14 @@ export const SCHEDULE_TEMPLATES: Record<string, ScheduleTemplate> = {
     icon: '🌙',
     targetLeads: 100,
     schedules: {
-      scrapeJobCron: '0 0 * * *',       // Midnight
-      apolloJobCron: '0 1 * * *',       // 1 AM
+      shovelsJobCron: '0 0 * * *',       // Midnight
       enrichJobCron: '0 2 * * *',       // 2 AM
       mergeJobCron: '0 3 * * *',        // 3 AM
       validateJobCron: '0 4 * * *',     // 4 AM
       enrollJobCron: '0 5 * * *',       // 5 AM
     },
     estimatedCosts: {
-      apollo: '~66 credits/day',
-      apify: '~$0.50/day',
+      shovels: '~$0.50/day',
     },
   },
 
@@ -138,16 +126,14 @@ export const SCHEDULE_TEMPLATES: Record<string, ScheduleTemplate> = {
     icon: '⚡',
     targetLeads: 150,
     schedules: {
-      scrapeJobCron: '0 */4 * * *',           // Every 4 hours
-      apolloJobCron: '30 */4 * * *',          // Every 4 hours + 30min
+      shovelsJobCron: '0 */4 * * *',           // Every 4 hours
       enrichJobCron: '0 1,5,9,13,17,21 * * *',
       mergeJobCron: '30 1,5,9,13,17,21 * * *',
       validateJobCron: '0 2,6,10,14,18,22 * * *',
       enrollJobCron: '0 3,7,11,15,19,23 * * *',
     },
     estimatedCosts: {
-      apollo: '~100 credits/day',
-      apify: '~$1.00/day',
+      shovels: '~$1.00/day',
     },
   },
 };

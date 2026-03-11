@@ -20,6 +20,7 @@ model Company {
   country          String?
   linkedinUrl      String?
   website          String?
+  revenue          String?
   apolloId         String?   @unique
   enrichmentData   Json?
   createdAt        DateTime  @default(now()) @db.Timestamptz(6)
@@ -38,7 +39,7 @@ model Company {
 
 model Contact {
   id                    String                @id @default(dbgenerated("(gen_random_uuid())::text"))
-  email                 String                @unique
+  email                 String?               @unique
   firstName             String?
   lastName              String?
   fullName              String?
@@ -77,6 +78,14 @@ model Contact {
   apifyId               String?               @unique
   hunterEnrichedAt      DateTime?
   hunterScore           Int?
+  shovelsContractorId   String?
+  shovelsEmployeeId     String?
+  permitType            String?
+  permitCity            String?
+  licenseNumber         String?
+  permitSearchId        String?
+  clayEnrichmentStatus  ClayStatus            @default(PENDING)
+  clayEnrichedAt        DateTime?             @db.Timestamptz(6)
   googlePlaceId         String?               @unique
   activityLogs          ActivityLog[]
   campaignEnrollments   CampaignEnrollment[]
@@ -463,6 +472,31 @@ model Settings {
   
   // Campaign Routing
   routingFallbackBehavior String?   @default("default_campaign")
+
+  // Shovels Permit Scraper
+  shovelsJobEnabled      Boolean   @default(true)
+  shovelsJobCron         String?   @default("0 7 * * *")
+  shovelsPermitTypes     String[]  @default([])
+  shovelsGeoIds          String[]  @default([])
+  shovelsLocations       String[]  @default([])
+  shovelsDateRangeDays   Int?      @default(365)
+  shovelsMaxResults      Int?      @default(100)
+  shovelsEnableEmployees Boolean   @default(true)
+
+  // Employee Filtering
+  shovelsEmployeeSeniorityFilter  String[]  @default(["Senior", "Executive"])
+  shovelsEmployeeDepartmentFilter String[]  @default(["Operations", "Management", "Administration"])
+  shovelsEmployeeTitleInclude     String[]  @default(["Owner", "President", "CEO", "Founder", "Director", "VP", "Vice President"])
+  shovelsEmployeeTitleExclude     String[]  @default(["Technician", "Installer", "Helper", "Laborer", "Apprentice"])
+
+  // Permit Routing
+  permitRouteMode                String?   @default("email")
+  permitEmailCampaignId          String?
+  permitGhlWorkflowId            String?
+  permitGhlEmailReplyWorkflowId  String?
+  permitGhlSmsReplyWorkflowId    String?
+  permitSmsFallbackEnabled       Boolean   @default(true)
+  permitAutoRouteEnabled         Boolean   @default(false)
 }
 
 model MessageTemplate {
@@ -548,6 +582,7 @@ model DailyMetrics {
   validateJobRan     Boolean  @default(false)
   enrollJobRan       Boolean  @default(false)
   apolloJobRan       Boolean  @default(false)
+  shovelsJobRan      Boolean  @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @default(now()) @updatedAt
 
@@ -573,11 +608,51 @@ model ApolloCreditUsage {
   @@index([month])
 }
 
+model PermitSearch {
+  id                   String              @id @default(dbgenerated("(gen_random_uuid())::text"))
+  permitType           String
+  city                 String
+  geoId                String
+  startDate            DateTime            @db.Date
+  endDate              DateTime            @db.Date
+  status               PermitSearchStatus  @default(PENDING)
+  totalFound           Int                 @default(0)
+  totalEnriched        Int                 @default(0)
+  totalIncomplete      Int                 @default(0)
+  googleSheetUrl       String?
+  googleSheetId        String?
+  createdAt            DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum PermitSearchStatus {
+  PENDING
+  SEARCHING
+  ENRICHING
+  SHEET_WRITTEN
+  READY_FOR_REVIEW
+  APPROVED
+  ROUTING
+  COMPLETED
+  FAILED
+}
+
+enum ClayStatus {
+  PENDING
+  ENRICHED
+  INCOMPLETE
+  SKIPPED
+}
+
 enum ContactStatus {
   NEW
   VALIDATING
   VALIDATED
   INVALID
+  IRRELEVANT
   IN_SEQUENCE
   REPLIED
   BOUNCED

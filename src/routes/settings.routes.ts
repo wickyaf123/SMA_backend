@@ -54,33 +54,35 @@ router.post('/default-campaigns/sms', settingsController.setDefaultSmsCampaign.b
 
 /**
  * GET /api/v1/settings/scrapers
- * Get all scraper settings (Apify + Apollo)
+ * Get all scraper settings
  */
 router.get('/scrapers', settingsController.getScraperSettings.bind(settingsController));
 
 /**
- * GET /api/v1/settings/scrapers/apify
- * Get Apify (Google Maps) scraper settings
+ * GET /api/v1/settings/scrapers/shovels
+ * Get Shovels scraper settings
  */
-router.get('/scrapers/apify', settingsController.getApifySettings.bind(settingsController));
+router.get('/scrapers/shovels', settingsController.getShovelsSettings.bind(settingsController));
 
 /**
- * PATCH /api/v1/settings/scrapers/apify
- * Update Apify (Google Maps) scraper settings
+ * PATCH /api/v1/settings/scrapers/shovels
+ * Update Shovels scraper settings
  */
-router.patch('/scrapers/apify', settingsController.updateApifySettings.bind(settingsController));
+router.patch('/scrapers/shovels', settingsController.updateShovelsSettings.bind(settingsController));
+
+// ==================== PERMIT ROUTING ====================
 
 /**
- * GET /api/v1/settings/scrapers/apollo
- * Get Apollo scraper settings
+ * GET /api/v1/settings/permit-routing
+ * Get permit routing settings
  */
-router.get('/scrapers/apollo', settingsController.getApolloSettings.bind(settingsController));
+router.get('/permit-routing', settingsController.getPermitRoutingSettings.bind(settingsController));
 
 /**
- * PATCH /api/v1/settings/scrapers/apollo
- * Update Apollo scraper settings
+ * PATCH /api/v1/settings/permit-routing
+ * Update permit routing settings
  */
-router.patch('/scrapers/apollo', settingsController.updateApolloSettings.bind(settingsController));
+router.patch('/permit-routing', settingsController.updatePermitRoutingSettings.bind(settingsController));
 
 // ==================== PIPELINE CONTROL ====================
 

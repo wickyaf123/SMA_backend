@@ -590,7 +590,7 @@ export class CampaignRoutingService {
       return {
         id: contact.id,
         label: `${displayName} - ${companyName} (${location})`,
-        email: contact.email,
+        email: contact.email || '',
         source: contact.source,
         industry: contact.company?.industry || null,
         state: contact.state,

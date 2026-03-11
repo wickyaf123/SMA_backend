@@ -1,18 +1,14 @@
 /**
  * Scraper Job Processor
- * Handles Google Maps (Apify) and Apollo scraping jobs
+ * Handles Shovels permit scraping jobs
  */
 
 import { Job } from 'bullmq';
-import { GoogleMapsScraperService } from '../../services/scraper/google-maps.service';
-import { leadIngestionService } from '../../services/lead/ingestion.service';
-import { settingsService } from '../../services/settings/settings.service';
+import { shovelsScraperService } from '../../services/scraper/shovels.service';
 import { realtimeEmitter } from '../../services/realtime/event-emitter.service';
 import { dailyMetricsService } from '../../services/metrics/daily-metrics.service';
 import { logger } from '../../utils/logger';
 import type { ScraperJobData } from '../queues';
-
-const googleMapsService = new GoogleMapsScraperService();
 
 export async function processScraperJob(job: Job<ScraperJobData>): Promise<any> {
   const { type, config } = job.data;
@@ -32,12 +28,8 @@ export async function processScraperJob(job: Job<ScraperJobData>): Promise<any> 
     let result: any;
 
     switch (type) {
-      case 'google-maps':
-        result = await processGoogleMapsScrape(job, config);
-        break;
-
-      case 'apollo':
-        result = await processApolloScrape(job, config);
+      case 'shovels':
+        result = await processShovelsScrape(job);
         break;
 
       default:
@@ -47,10 +39,8 @@ export async function processScraperJob(job: Job<ScraperJobData>): Promise<any> 
     const duration = Date.now() - startTime;
 
     // Mark job as ran in daily metrics
-    if (type === 'google-maps') {
-      await dailyMetricsService.markJobExecuted('scrapeJobRan');
-    } else if (type === 'apollo') {
-      await dailyMetricsService.markJobExecuted('apolloJobRan');
+    if (type === 'shovels') {
+      await dailyMetricsService.markJobExecuted('shovelsJobRan');
     }
 
     // Emit job completed
@@ -82,51 +72,21 @@ export async function processScraperJob(job: Job<ScraperJobData>): Promise<any> 
   }
 }
 
-/**
- * Process Google Maps scraping via Apify
- */
-async function processGoogleMapsScrape(
-  job: Job,
-  config: ScraperJobData['config']
-): Promise<any> {
-  // Get settings from database if useSettings is true
-  let finalConfig = config;
+async function processShovelsScrape(job: Job): Promise<any> {
+  logger.info('Starting Shovels permit scrape');
 
-  if (config.useSettings) {
-    const apifySettings = await settingsService.getApifySettings();
-    finalConfig = {
-      query: config.query || apifySettings.searchTerms[0],
-      location: config.location || apifySettings.locations[0],
-      maxResults: config.maxResults || apifySettings.maxResults,
-    };
-  }
-
-  const query = finalConfig.query || 'HVAC companies';
-  const location = finalConfig.location || 'United States';
-  const maxResults = finalConfig.maxResults || 50;
-
-  logger.info({ query, location, maxResults }, 'Starting Google Maps scrape');
-
-  // Emit progress - starting
   await job.updateProgress(10);
   realtimeEmitter.emitJobEvent({
     jobId: job.id!,
-    jobType: 'scraper:google-maps',
+    jobType: 'scraper:shovels',
     status: 'progress',
-    progress: { current: 0, total: maxResults, percentage: 10 },
+    progress: { current: 0, total: 100, percentage: 10 },
   });
 
-  // Run the scraper
-  const result = await googleMapsService.scrapeByIndustryAndLocation(
-    query,
-    location,
-    { maxResults }
-  );
+  const result = await shovelsScraperService.runFromSettings();
 
-  // Emit final progress
   await job.updateProgress(100);
 
-  // Update metrics
   if (result.totalImported > 0) {
     await dailyMetricsService.incrementMetric('contactsImported', result.totalImported);
   }
@@ -135,67 +95,10 @@ async function processGoogleMapsScrape(
     success: true,
     totalScraped: result.totalScraped,
     totalImported: result.totalImported,
-    query,
-    location,
-  };
-}
-
-/**
- * Process Apollo scraping and enrichment
- */
-async function processApolloScrape(
-  job: Job,
-  config: ScraperJobData['config']
-): Promise<any> {
-  // Get settings from database
-  const apolloSettings = await settingsService.getApolloSettings();
-
-  const industry = config.industry || apolloSettings.industry;
-  const enrichLimit = config.enrichLimit || apolloSettings.enrichLimit;
-
-  logger.info({ industry, enrichLimit }, 'Starting Apollo scrape');
-
-  // Emit progress - starting
-  await job.updateProgress(10);
-  realtimeEmitter.emitJobEvent({
-    jobId: job.id!,
-    jobType: 'scraper:apollo',
-    status: 'progress',
-    progress: { current: 0, total: enrichLimit, percentage: 10 },
-  });
-
-  // Build search params from settings
-  const searchParams = {
-    q_organization_industry_tag_ids: [industry],
-    person_titles: apolloSettings.personTitles,
-    person_locations: apolloSettings.locations,
-    per_page: Math.min(enrichLimit, 100),
-    reveal_phone_number: apolloSettings.enrichPhones,
-  };
-
-  // Run Apollo import
-  const result = await leadIngestionService.importFromApollo(
-    searchParams as any,
-    enrichLimit
-  );
-
-  // Emit final progress
-  await job.updateProgress(100);
-
-  // Update metrics
-  if (result.imported > 0) {
-    await dailyMetricsService.incrementMetric('contactsImported', result.imported);
-  }
-
-  return {
-    success: true,
-    totalSearched: result.total,
-    totalImported: result.imported,
     duplicates: result.duplicates,
-    invalid: result.invalid,
-    industry,
+    filtered: result.filtered,
+    searchesRun: result.searchesRun,
   };
 }
-
 
 

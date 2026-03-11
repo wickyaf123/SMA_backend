@@ -187,45 +187,7 @@ export class LeadIngestionService {
       // Process contacts (validation, deduplication, save)
       const result = await this.processContacts(jobId, filteredContacts);
 
-      // ==================== STEP 4: REQUEST MOBILE PHONES (OPTIONAL, ASYNC) ====================
-      // Check if phone enrichment is enabled
-      const apolloSettings = await settingsService.getApolloSettings();
-      
-      if (config.apollo.webhookUrl && apolloSettings.enrichPhones) {
-        logger.info({ jobId }, 'Step 4: Requesting mobile phones via webhook (async)');
-        
-        const contactsForMobile = normalizedContacts
-          .filter(c => c.email)
-          .map(c => ({ 
-            id: c.apolloId, 
-            email: c.email,
-            first_name: c.firstName,
-            last_name: c.lastName,
-          }))
-          .slice(0, 50); // Limit to 50 mobile phone requests to avoid excessive costs
-
-        // Fire and forget - don't wait for mobile phone requests
-        apolloClient.requestMobilePhones(
-          contactsForMobile,
-          config.apollo.webhookUrl,
-          apolloSettings.enrichPhones
-        ).catch(error => {
-          logger.error({
-            jobId,
-            error: error.message,
-          }, 'Failed to request mobile phones');
-        });
-
-        logger.info({
-          jobId,
-          mobileRequests: contactsForMobile.length,
-        }, 'Mobile phone requests sent (will arrive via webhook)');
-      } else {
-        const reason = !config.apollo.webhookUrl 
-          ? 'no webhook URL configured' 
-          : 'phone enrichment disabled in settings';
-        logger.debug({ jobId, reason }, 'Skipping mobile phone requests');
-      }
+      // Phone enrichment now handled by Clay enrichment pipeline
 
       // ==================== COMPLETE ====================
       await importJobService.completeJob(jobId);

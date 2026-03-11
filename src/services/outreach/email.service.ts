@@ -269,7 +269,7 @@ export class EmailOutreachService {
 
       // Update each enrollment
       for (const enrollment of campaign.enrollments) {
-        const instantlyStatus = emailStatusMap.get(enrollment.contact.email);
+        const instantlyStatus = enrollment.contact.email ? emailStatusMap.get(enrollment.contact.email) : undefined;
         if (!instantlyStatus) continue;
 
         let newStatus: EnrollmentStatus = enrollment.status;

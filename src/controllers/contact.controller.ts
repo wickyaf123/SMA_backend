@@ -187,122 +187,14 @@ export class ContactController {
    * target US states, negative filters for wholesalers/manufacturers.
    */
   public async importFromApollo(
-    req: Request,
+    _req: Request,
     res: Response,
-    next: NextFunction
+    _next: NextFunction
   ): Promise<void> {
-    try {
-      // Get Apollo settings - will throw if not configured
-      const apolloSettings = await settingsService.getApolloSettings();
-      
-      const {
-        // Person filters
-        personTitles = apolloSettings.personTitles,
-        
-        // Organization filters
-        organizationLocations = apolloSettings.locations,
-        excludeLocations = apolloSettings.excludeLocations,
-        industry = apolloSettings.industry,
-        
-        // Size filters
-        employeesMin = apolloSettings.employeesMin,
-        employeesMax = apolloSettings.employeesMax,
-        revenueMin = apolloSettings.revenueMin,
-        revenueMax = apolloSettings.revenueMax,
-        
-        // Technology and growth
-        technologies = apolloSettings.technologies,
-        employeeGrowth = apolloSettings.employeeGrowthRate,
-        
-        // Pagination and limits
-        page = apolloSettings.page,
-        perPage = apolloSettings.perPage,
-        enrichLimit = apolloSettings.enrichLimit,
-      } = req.body;
-
-      logger.info({
-        industry,
-        locations: organizationLocations,
-        excludeLocations,
-        enrichLimit,
-      }, 'Starting Apollo import request');
-
-      // Build Apollo search params using settings (no hardcoded defaults)
-      const searchParams: any = {
-        person_titles: personTitles,
-        organization_locations: organizationLocations,
-        page,
-        per_page: perPage,
-        reveal_personal_emails: true,
-        reveal_phone_number: apolloSettings.enrichPhones,
-        
-        // Use configured keywords from settings
-        q_organization_keywords: apolloSettings.searchKeywords,
-        q_organization_keyword_tags: apolloSettings.organizationKeywordTags,
-        q_organization_not_keyword_tags: apolloSettings.negativeKeywordTags,
-        
-        organization_num_employees_ranges: employeesMin && employeesMax 
-          ? [`${employeesMin},${employeesMax}`] 
-          : undefined,
-        
-        revenue_range: revenueMin && revenueMax 
-          ? { min: revenueMin, max: revenueMax } 
-          : undefined,
-      };
-
-      // Add optional filters from settings
-      if (excludeLocations?.length > 0) {
-        searchParams.organization_not_locations = excludeLocations;
-      }
-      if (technologies?.length > 0) {
-        searchParams.organization_technologies = technologies;
-      }
-      if (employeeGrowth) {
-        searchParams.organization_employee_growth_rate = employeeGrowth;
-      }
-      if (apolloSettings.personLocations && apolloSettings.personLocations.length > 0) {
-        searchParams.person_locations = apolloSettings.personLocations;
-      }
-      if (apolloSettings.personSeniorities && apolloSettings.personSeniorities.length > 0) {
-        searchParams.person_seniorities = apolloSettings.personSeniorities;
-      }
-      if (apolloSettings.industryTagIds && apolloSettings.industryTagIds.length > 0) {
-        searchParams.organization_industry_tag_ids = apolloSettings.industryTagIds;
-      }
-      if (apolloSettings.fundingStage) {
-        searchParams.funding_stage = apolloSettings.fundingStage;
-      }
-
-      logger.info({
-        industry,
-        keywords: searchParams.q_organization_keywords,
-        keywordTags: searchParams.q_organization_keyword_tags,
-        locations: searchParams.organization_locations,
-        employeeRange: searchParams.organization_num_employees_ranges,
-        revenueRange: searchParams.revenue_range,
-        negativeFilters: searchParams.q_organization_not_keyword_tags,
-      }, 'Apollo search params configured from settings');
-
-      // Start import (async) with enrichment limit
-      const result = await leadIngestionService.importFromApollo(searchParams, enrichLimit);
-      
-      res.status(202).json(successResponse(result, {
-        message: `${industry} contractor import from Apollo started successfully`,
-        enrichLimit,
-        filtersApplied: {
-          industry,
-          employeeRange: searchParams.organization_num_employees_ranges?.[0] || 'Not specified',
-          revenueRange: searchParams.revenue_range 
-            ? `$${(searchParams.revenue_range.min / 1000000).toFixed(0)}M-$${(searchParams.revenue_range.max / 1000000).toFixed(0)}M`
-            : 'Not specified',
-          locations: searchParams.organization_locations?.length || 0,
-          excludedTypes: searchParams.q_organization_not_keyword_tags?.length || 0,
-        },
-      }));
-    } catch (error) {
-      logger.error({ error, body: req.body }, 'Error importing from Apollo');
-      next(error);
-    }
+    res.status(410).json({
+      success: false,
+      error: 'Apollo import has been deprecated. Use the Shovels permit scraper instead.',
+    });
   }
 
   /**

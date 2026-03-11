@@ -23,7 +23,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().url('REDIS_URL must be a valid URL'),
 
   // Apollo
-  APOLLO_API_KEY: z.string().min(1, 'APOLLO_API_KEY is required'),
+  APOLLO_API_KEY: z.string().optional(),
   APOLLO_WEBHOOK_URL: z.string().url().optional(),
 
   // Instantly
@@ -54,6 +54,16 @@ const envSchema = z.object({
 
   // Apify (Phase 3.5 - Google Maps Scraper)
   APIFY_API_KEY: z.string().optional(),
+
+  // Shovels (Permit Intelligence)
+  SHOVELS_API_KEY: z.string().min(1, 'SHOVELS_API_KEY is required'),
+
+  // Clay (Enrichment)
+  CLAY_WEBHOOK_SECRET: z.string().optional(),
+  CLAY_TABLE_URL: z.string().url().optional(),
+
+  // Anthropic (Reply Classification)
+  ANTHROPIC_API_KEY: z.string().optional(),
 
   // GoHighLevel (Phase 3.5 - SMS + Unified Inbox + Email Notifications)
   GHL_API_KEY: z.string().optional(),
@@ -169,6 +179,20 @@ export const config = {
   apify: {
     apiKey: env.APIFY_API_KEY,
     baseUrl: 'https://api.apify.com/v2',
+  },
+
+  shovels: {
+    apiKey: env.SHOVELS_API_KEY,
+    baseUrl: 'https://api.shovels.ai/v2',
+  },
+
+  clay: {
+    webhookSecret: env.CLAY_WEBHOOK_SECRET,
+    tableUrl: env.CLAY_TABLE_URL,
+  },
+
+  anthropic: {
+    apiKey: env.ANTHROPIC_API_KEY,
   },
 
   ghl: {

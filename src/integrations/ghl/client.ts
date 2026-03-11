@@ -415,6 +415,27 @@ export class GoHighLevelClient {
     }
   }
 
+  // ==================== Workflow Management ====================
+
+  /**
+   * Add a contact to a GHL workflow
+   * GHL API v2: POST /contacts/{contactId}/workflow/{workflowId}
+   */
+  async addContactToWorkflow(contactId: string, workflowId: string): Promise<void> {
+    logger.debug({ contactId, workflowId }, 'Adding contact to GHL workflow');
+
+    try {
+      await this.api.post(`/contacts/${contactId}/workflow/${workflowId}`);
+      logger.info({ contactId, workflowId }, 'Contact added to GHL workflow');
+    } catch (error: any) {
+      logger.error(
+        { contactId, workflowId, status: error.response?.status, data: error.response?.data },
+        'Failed to add contact to GHL workflow'
+      );
+      throw error;
+    }
+  }
+
   // ==================== Conversations ====================
 
   /**

@@ -8,6 +8,7 @@ import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { GHLInboundMessagePayload } from '../../integrations/ghl/types';
 import { unifiedReplyHandler } from '../../services/reply/unified-reply-handler.service';
+import { ghlClient } from '../../integrations/ghl/client';
 
 class GHLWebhookController {
   /**
@@ -109,8 +110,29 @@ class GHLWebhookController {
         'Unified reply handler processed GHL reply'
       );
 
-      // NOTE: Email notifications are automatically sent by the unified reply handler
-      // via emailNotificationService.sendReplyNotification() - see unified-reply-handler.service.ts
+      // Enroll in the appropriate GHL workflow based on reply channel
+      if (payload.contactId) {
+        try {
+          const settings = await prisma.settings.findFirst();
+          const isSms = payload.message.type === 'SMS';
+          const workflowId = isSms
+            ? (settings as any)?.permitGhlSmsReplyWorkflowId
+            : (settings as any)?.permitGhlEmailReplyWorkflowId;
+
+          if (workflowId) {
+            await ghlClient.addContactToWorkflow(payload.contactId, workflowId);
+            logger.info(
+              { ghlContactId: payload.contactId, workflowId, channel: payload.message.type },
+              'Contact enrolled in reply GHL workflow'
+            );
+          }
+        } catch (wfError: any) {
+          logger.warn(
+            { ghlContactId: payload.contactId, error: wfError.message },
+            'Failed to enroll in reply workflow (non-critical)'
+          );
+        }
+      }
 
       res.status(200).json({
         received: true,

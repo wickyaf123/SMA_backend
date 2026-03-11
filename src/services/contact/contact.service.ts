@@ -111,7 +111,7 @@ export class ContactService {
             options: {
               validateEmail: !!data.email,
               validatePhone: !!data.phone,
-              enrichWithHunter: true,
+              enrichWithClay: true,
               checkDuplicates: false, // Already checked above
             },
           },

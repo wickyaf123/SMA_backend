@@ -57,9 +57,17 @@ class GHLUnifiedInboxService {
           phone: true,
           fullName: true,
           firstName: true,
+          lastName: true,
           ghlContactId: true,
+          city: true,
+          state: true,
+          permitType: true,
+          permitCity: true,
+          licenseNumber: true,
+          tags: true,
+          enrichmentData: true,
           company: {
-            select: { name: true },
+            select: { name: true, website: true },
           },
         },
       });
@@ -84,15 +92,35 @@ class GHLUnifiedInboxService {
         if (existingGHLContact) {
           ghlContactId = existingGHLContact.id;
         } else {
-          // Create new contact in GHL
+          const enrichment = (contact.enrichmentData || {}) as Record<string, any>;
+          const permitTags = (contact.tags || []).filter((t: string) => t.startsWith('permit:'));
+          const ghlTags = ['auto-synced', 'lead-system', ...permitTags];
+          if (contact.permitType) ghlTags.push(`permit-type:${contact.permitType}`);
+
+          const customFields: Array<{ key: string; field_value: string }> = [
+            { key: 'permit_type', field_value: contact.permitType || '' },
+            { key: 'permit_city', field_value: contact.permitCity || '' },
+            { key: 'permit_date', field_value: enrichment.permitDate || '' },
+            { key: 'permit_count', field_value: String(enrichment.permitCount || '') },
+            { key: 'avg_job_value', field_value: String(enrichment.avgJobValue || '') },
+            { key: 'total_job_value', field_value: String(enrichment.totalJobValue || '') },
+            { key: 'company_revenue', field_value: enrichment.revenue || '' },
+            { key: 'license_number', field_value: contact.licenseNumber || '' },
+            { key: 'internal_contact_id', field_value: contact.id },
+          ].filter(f => f.field_value !== '');
+
           const newGHLContact = await ghlClient.createContact({
             firstName: contact.firstName || contact.fullName?.split(' ')[0] || 'Unknown',
-            lastName: contact.fullName?.split(' ').slice(1).join(' ') || undefined,
+            lastName: contact.lastName || contact.fullName?.split(' ').slice(1).join(' ') || undefined,
             email: contact.email || undefined,
             phone: contact.phone || undefined,
             companyName: contact.company?.name || undefined,
-            tags: ['auto-synced', 'lead-system'],
-            source: 'Lead Management System',
+            city: contact.city || undefined,
+            state: contact.state || undefined,
+            website: contact.company?.website || undefined,
+            tags: ghlTags,
+            source: 'PermitScraper.ai',
+            customFields,
           });
           ghlContactId = newGHLContact.id;
         }

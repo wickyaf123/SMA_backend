@@ -9,7 +9,7 @@ export interface DeduplicationResult {
   existingContactId?: string;
   existingContact?: {
     id: string;
-    email: string;
+    email: string | null;
     fullName: string | null;
     status: string;
     createdAt: Date;

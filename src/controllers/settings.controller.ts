@@ -188,16 +188,16 @@ export class SettingsController {
   }
 
   /**
-   * Get Apify (Google Maps) scraper settings
-   * GET /api/v1/settings/scrapers/apify
+   * Get Shovels scraper settings
+   * GET /api/v1/settings/scrapers/shovels
    */
-  async getApifySettings(
+  async getShovelsSettings(
     req: Request,
     res: Response,
     next: NextFunction
   ): Promise<void> {
     try {
-      const settings = await settingsService.getApifySettings();
+      const settings = await settingsService.getShovelsSettings();
       sendSuccess(res, settings);
     } catch (error) {
       next(error);
@@ -205,56 +205,19 @@ export class SettingsController {
   }
 
   /**
-   * Update Apify (Google Maps) scraper settings
-   * PATCH /api/v1/settings/scrapers/apify
+   * Update Shovels scraper settings
+   * PATCH /api/v1/settings/scrapers/shovels
    */
-  async updateApifySettings(
+  async updateShovelsSettings(
     req: Request,
     res: Response,
     next: NextFunction
   ): Promise<void> {
     try {
-      const settings = await settingsService.updateApifySettings(req.body);
+      const settings = await settingsService.updateShovelsSettings(req.body);
       sendSuccess(res, {
         ...settings,
-        message: 'Apify scraper settings updated successfully',
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * Get Apollo scraper settings
-   * GET /api/v1/settings/scrapers/apollo
-   */
-  async getApolloSettings(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ): Promise<void> {
-    try {
-      const settings = await settingsService.getApolloSettings();
-      sendSuccess(res, settings);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * Update Apollo scraper settings
-   * PATCH /api/v1/settings/scrapers/apollo
-   */
-  async updateApolloSettings(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ): Promise<void> {
-    try {
-      const settings = await settingsService.updateApolloSettings(req.body);
-      sendSuccess(res, {
-        ...settings,
-        message: 'Apollo scraper settings updated successfully',
+        message: 'Shovels scraper settings updated successfully',
       });
     } catch (error) {
       next(error);
@@ -480,7 +443,7 @@ export class SettingsController {
   ): Promise<void> {
     try {
       const { jobName } = req.params;
-      const validJobs = ['scrape', 'apollo', 'enrich', 'merge', 'validate', 'enroll'];
+      const validJobs = ['shovels', 'enrich', 'merge', 'validate', 'enroll'];
       
       if (!validJobs.includes(jobName)) {
         sendSuccess(res, { error: `Invalid job name. Valid jobs: ${validJobs.join(', ')}` }, 400);
@@ -526,6 +489,36 @@ export class SettingsController {
       sendSuccess(res, {
         ...status,
         message: 'Scheduler reloaded successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+  // ==================== PERMIT ROUTING ====================
+
+  async getPermitRoutingSettings(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const settings = await settingsService.getPermitRoutingSettings();
+      sendSuccess(res, settings);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updatePermitRoutingSettings(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const settings = await settingsService.updatePermitRoutingSettings(req.body);
+      sendSuccess(res, {
+        ...settings,
+        message: 'Permit routing settings updated successfully',
       });
     } catch (error) {
       next(error);

@@ -5,6 +5,7 @@ import { sendSuccess } from '../../utils/response';
 import { unifiedReplyHandler } from '../../services/reply/unified-reply-handler.service';
 import { campaignService } from '../../services/campaign/campaign.service';
 import { ghlUnifiedInboxService } from '../../services/ghl/ghl-unified-inbox.service';
+import { ghlClient } from '../../integrations/ghl/client';
 import type {
   InstantlyWebhookPayload,
   InstantlyWebhookEvent,
@@ -228,6 +229,25 @@ export class InstantlyWebhookController {
               },
               'Email reply routed to GHL unified inbox'
             );
+
+            if (ghlResult.ghlContactId) {
+              try {
+                const settings = await prisma.settings.findFirst();
+                const emailWorkflowId = (settings as any)?.permitGhlEmailReplyWorkflowId;
+                if (emailWorkflowId) {
+                  await ghlClient.addContactToWorkflow(ghlResult.ghlContactId, emailWorkflowId);
+                  logger.info(
+                    { ghlContactId: ghlResult.ghlContactId, workflowId: emailWorkflowId },
+                    'Contact enrolled in email reply GHL workflow'
+                  );
+                }
+              } catch (wfError: any) {
+                logger.warn(
+                  { contactId: contact.id, error: wfError.message },
+                  'Failed to enroll contact in email reply workflow (non-critical)'
+                );
+              }
+            }
           } else {
             logger.warn(
               { contactId: contact.id, error: ghlResult.error },

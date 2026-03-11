@@ -3,6 +3,7 @@ import { webhookController } from '../controllers/webhook.controller';
 import { instantlyWebhookController } from '../controllers/webhook/instantly.controller';
 import { phantomBusterWebhookController } from '../controllers/webhook/phantombuster.controller';
 import { ghlWebhookController } from '../controllers/webhook/ghl.controller';
+import { handleClayWebhook } from '../controllers/webhook/clay.controller';
 import { webhookLogController } from '../controllers/webhook-log.controller';
 import { authenticateApiKey } from '../middleware/auth';
 
@@ -41,6 +42,9 @@ router.post(
   '/ghl/reply',
   ghlWebhookController.handleWebhook.bind(ghlWebhookController)
 );
+
+// Clay enrichment webhooks
+router.post('/clay', handleClayWebhook);
 
 /**
  * Webhook Logs (protected - requires authentication)

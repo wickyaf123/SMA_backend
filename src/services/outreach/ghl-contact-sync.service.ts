@@ -35,17 +35,19 @@ class GHLContactSyncService {
     let ghlContact: GHLContact | null = null;
 
     if (contact.ghlContactId) {
-      // Try to fetch existing contact by stored ID
       ghlContact = await ghlClient.getContact(contact.ghlContactId);
     }
 
     if (!ghlContact) {
-      // Search by email or phone
       ghlContact = await ghlClient.findContactByEmailOrPhone(
         contact.email || undefined,
         contact.phone || undefined
       );
     }
+
+    const enrichment = (contact.enrichmentData || {}) as Record<string, any>;
+    const permitTags = (contact.tags || []).filter((t: string) => t.startsWith('permit:'));
+    const ghlTags = [...(contact.tags || []), ...(!permitTags.length && contact.permitType ? [`permit:${contact.permitType}`] : [])];
 
     const contactData = {
       firstName: contact.firstName || undefined,
@@ -58,17 +60,23 @@ class GHLContactSyncService {
       country: contact.country || undefined,
       website: contact.company?.website || undefined,
       timezone: contact.timezone || undefined,
-      tags: contact.tags || [],
-      source: 'Lead Management System',
-      // GHL v2 API expects customFields as an array of {key, field_value}
+      tags: ghlTags,
+      source: 'PermitScraper.ai',
       customFields: [
         { key: 'title', field_value: contact.title || '' },
         { key: 'linkedin_url', field_value: contact.linkedinUrl || '' },
-        { key: 'apollo_id', field_value: contact.apolloId || '' },
         { key: 'internal_contact_id', field_value: contact.id },
         { key: 'data_quality', field_value: contact.dataQuality?.toString() || '0' },
         { key: 'data_sources', field_value: (contact.dataSources || []).join(', ') },
-      ],
+        { key: 'permit_type', field_value: contact.permitType || '' },
+        { key: 'permit_city', field_value: contact.permitCity || '' },
+        { key: 'permit_date', field_value: enrichment.permitDate || '' },
+        { key: 'permit_count', field_value: String(enrichment.permitCount || '') },
+        { key: 'avg_job_value', field_value: String(enrichment.avgJobValue || '') },
+        { key: 'total_job_value', field_value: String(enrichment.totalJobValue || '') },
+        { key: 'company_revenue', field_value: enrichment.revenue || '' },
+        { key: 'license_number', field_value: contact.licenseNumber || '' },
+      ].filter(f => f.field_value !== ''),
     };
 
     if (ghlContact) {

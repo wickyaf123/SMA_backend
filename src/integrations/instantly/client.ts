@@ -285,6 +285,48 @@ export class InstantlyClient {
 
     return false;
   }
+
+  // ==================== PERMIT INTELLIGENCE EXTENSIONS ====================
+
+  async addLeadWithPersonalization(
+    email: string,
+    campaignId: string,
+    variables: Record<string, any>
+  ): Promise<void> {
+    await retryWithBackoff(async () => {
+      await this.client.post('/lead/add', {
+        api_key: this.apiKey,
+        campaign_id: campaignId,
+        email,
+        ...Object.fromEntries(
+          Object.entries(variables).map(([k, v]) => [`custom_${k}`, String(v)])
+        ),
+      });
+    }, { maxRetries: 2, baseDelay: 1000 });
+  }
+
+  async pauseCampaign(campaignId: string): Promise<void> {
+    await this.client.post('/campaign/update/status', {
+      api_key: this.apiKey,
+      campaign_id: campaignId,
+      status: false,
+    });
+  }
+
+  async resumeCampaign(campaignId: string): Promise<void> {
+    await this.client.post('/campaign/update/status', {
+      api_key: this.apiKey,
+      campaign_id: campaignId,
+      status: true,
+    });
+  }
+
+  async getReplyCount(campaignId: string): Promise<number> {
+    const response = await this.client.get('/analytics/campaign/summary', {
+      params: { api_key: this.apiKey, campaign_id: campaignId },
+    });
+    return response.data?.total_replies || 0;
+  }
 }
 
 // Export singleton instance (will be initialized with config at runtime)

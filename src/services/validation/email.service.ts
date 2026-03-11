@@ -28,6 +28,11 @@ export class EmailValidationService {
         throw new Error(`Contact ${contactId} not found`);
       }
 
+      if (!contact.email) {
+        logger.warn({ contactId }, 'Skipping email validation: no email on contact');
+        return EmailValidationStatus.INVALID;
+      }
+
       // Increment attempts counter
       const attempts = (contact.emailValidationAttempts || 0) + 1;
 

@@ -4,8 +4,8 @@
  * 
  * Queue Architecture:
  * - lead-processing: New contact processing (validation, enrichment, dedup)
- * - scraper: Google Maps and Apollo scraping jobs
- * - enrichment: Hunter.io email enrichment
+ * - scraper: Shovels permit scraping jobs
+ * - enrichment: Clay enrichment
  * - campaign: Campaign enrollment and outreach
  * - notification: Email notifications for replies
  */
@@ -68,13 +68,13 @@ export interface LeadProcessingJobData {
   options?: {
     validateEmail?: boolean;
     validatePhone?: boolean;
-    enrichWithHunter?: boolean;
+    enrichWithClay?: boolean;
     checkDuplicates?: boolean;
   };
 }
 
 export interface ScraperJobData {
-  type: 'google-maps' | 'apollo';
+  type: 'shovels';
   config: {
     query?: string;
     location?: string;
@@ -136,7 +136,7 @@ export const leadProcessingQueue = new Queue<LeadProcessingJobData>(
 
 /**
  * Scraper Queue
- * Handles: Google Maps scraping, Apollo searches
+ * Handles: Shovels permit scraping
  * Priority: Normal (scheduled jobs)
  */
 export const scraperQueue = new Queue<ScraperJobData>(
@@ -146,7 +146,7 @@ export const scraperQueue = new Queue<ScraperJobData>(
 
 /**
  * Enrichment Queue
- * Handles: Hunter.io enrichment, Apollo enrichment
+ * Handles: Clay enrichment
  * Priority: Normal
  */
 export const enrichmentQueue = new Queue<EnrichmentJobData>(
