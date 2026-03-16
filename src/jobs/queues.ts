@@ -74,7 +74,7 @@ export interface LeadProcessingJobData {
 }
 
 export interface ScraperJobData {
-  type: 'shovels';
+  type: 'shovels' | 'homeowner';
   config: {
     query?: string;
     location?: string;
@@ -120,6 +120,11 @@ export interface LinkedInJobData {
   linkedInActionId: string;
   contactId?: string;
   actionType?: string;
+}
+
+export interface WorkflowJobData {
+  workflowId: string;
+  stepOrder?: number;
 }
 
 // ==================== QUEUES ====================
@@ -204,6 +209,22 @@ export const linkedinQueue = new Queue<LinkedInJobData>(
   }
 );
 
+/**
+ * Workflow Queue
+ * Handles: Multi-step workflow execution orchestrated by the workflow engine
+ * Priority: Normal (single attempt - retries handled by the engine per-step)
+ */
+export const workflowQueue = new Queue<WorkflowJobData>(
+  'workflow',
+  {
+    ...defaultQueueOptions,
+    defaultJobOptions: {
+      ...defaultQueueOptions.defaultJobOptions,
+      attempts: 1, // Engine handles per-step retries
+    },
+  }
+);
+
 // ==================== QUEUE EVENTS ====================
 
 /**
@@ -212,6 +233,7 @@ export const linkedinQueue = new Queue<LinkedInJobData>(
 export const leadProcessingEvents = new QueueEvents('lead-processing', { connection: redis });
 export const scraperEvents = new QueueEvents('scraper', { connection: redis });
 export const campaignEvents = new QueueEvents('campaign', { connection: redis });
+export const workflowEvents = new QueueEvents('workflow', { connection: redis });
 
 // ==================== QUEUE REGISTRY ====================
 
@@ -224,6 +246,7 @@ export const allQueues = [
   validationQueue,
   outreachQueue,
   linkedinQueue,
+  workflowQueue,
 ];
 
 export const queueNames = allQueues.map(q => q.name);
@@ -298,6 +321,7 @@ export async function closeQueues(): Promise<void> {
     leadProcessingEvents.close(),
     scraperEvents.close(),
     campaignEvents.close(),
+    workflowEvents.close(),
   ]);
   logger.info('All queues closed');
 }

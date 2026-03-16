@@ -70,6 +70,20 @@ router.get('/scrapers/shovels', settingsController.getShovelsSettings.bind(setti
  */
 router.patch('/scrapers/shovels', settingsController.updateShovelsSettings.bind(settingsController));
 
+// ==================== HOMEOWNER SCRAPER ====================
+
+/**
+ * GET /api/v1/settings/scrapers/homeowner
+ * Get homeowner scraper settings
+ */
+router.get('/scrapers/homeowner', settingsController.getHomeownerSettings.bind(settingsController));
+
+/**
+ * PATCH /api/v1/settings/scrapers/homeowner
+ * Update homeowner scraper settings
+ */
+router.patch('/scrapers/homeowner', settingsController.updateHomeownerSettings.bind(settingsController));
+
 // ==================== PERMIT ROUTING ====================
 
 /**

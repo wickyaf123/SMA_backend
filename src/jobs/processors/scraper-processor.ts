@@ -5,6 +5,7 @@
 
 import { Job } from 'bullmq';
 import { shovelsScraperService } from '../../services/scraper/shovels.service';
+import { homeownerScraperService } from '../../services/scraper/homeowner.service';
 import { realtimeEmitter } from '../../services/realtime/event-emitter.service';
 import { dailyMetricsService } from '../../services/metrics/daily-metrics.service';
 import { logger } from '../../utils/logger';
@@ -32,15 +33,20 @@ export async function processScraperJob(job: Job<ScraperJobData>): Promise<any> 
         result = await processShovelsScrape(job);
         break;
 
+      case 'homeowner':
+        result = await processHomeownerScrape(job);
+        break;
+
       default:
         throw new Error(`Unknown scraper type: ${type}`);
     }
 
     const duration = Date.now() - startTime;
 
-    // Mark job as ran in daily metrics
     if (type === 'shovels') {
       await dailyMetricsService.markJobExecuted('shovelsJobRan');
+    } else if (type === 'homeowner') {
+      await dailyMetricsService.markJobExecuted('homeownerJobRan');
     }
 
     // Emit job completed
@@ -101,4 +107,26 @@ async function processShovelsScrape(job: Job): Promise<any> {
   };
 }
 
+async function processHomeownerScrape(job: Job): Promise<any> {
+  logger.info('Starting homeowner scrape');
 
+  await job.updateProgress(10);
+  realtimeEmitter.emitJobEvent({
+    jobId: job.id!,
+    jobType: 'scraper:homeowner',
+    status: 'progress',
+    progress: { current: 0, total: 100, percentage: 10 },
+  });
+
+  const result = await homeownerScraperService.runFromSettings();
+
+  await job.updateProgress(100);
+
+  return {
+    success: true,
+    totalScraped: result.totalScraped,
+    totalImported: result.totalImported,
+    duplicates: result.duplicates,
+    searchesRun: result.searchesRun,
+  };
+}

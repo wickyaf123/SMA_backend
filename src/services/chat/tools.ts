@@ -1,0 +1,1980 @@
+import { prisma } from '../../config/database';
+import { logger } from '../../utils/logger';
+import { campaignService } from '../campaign/campaign.service';
+import { campaignRoutingService } from '../campaign/routing.service';
+import { smsOutreachService } from '../outreach/sms.service';
+import { contactExportService } from '../contact/export.service';
+import { messageTemplateService } from '../templates/message-template.service';
+import { connectionService } from '../connection/connection.service';
+import { settingsService } from '../settings/settings.service';
+import { jobLogService } from '../job-log.service';
+import { getScheduler } from '../../jobs/scheduler';
+import { realieEnrichmentService } from '../enrichment/realie.service';
+import { redis } from '../../config/redis';
+
+import { workflowEngine } from '../workflow/workflow.engine';
+import { permitPipelineService } from '../permit/permit-pipeline.service';
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  input_schema: Record<string, any>;
+}
+
+export interface ToolResult {
+  success: boolean;
+  data?: any;
+  error?: string;
+}
+
+export interface ToolContext {
+  conversationId?: string;
+}
+
+// Tool schemas for Claude API
+export const toolDefinitions: ToolDefinition[] = [
+  // ==================== EXISTING TOOLS ====================
+  {
+    name: 'search_permits',
+    description:
+      'Search for building permits by type, city, and date range. Creates a permit search job.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        permitType: {
+          type: 'string',
+          description:
+            'Type of permit (e.g., hvac, plumbing, electrical, roofing, solar)',
+        },
+        city: { type: 'string', description: 'City to search in' },
+        geoId: {
+          type: 'string',
+          description: 'Geographic ID for the search area',
+        },
+        startDate: {
+          type: 'string',
+          description: 'Start date in YYYY-MM-DD format',
+        },
+        endDate: {
+          type: 'string',
+          description: 'End date in YYYY-MM-DD format',
+        },
+      },
+      required: ['permitType', 'city', 'geoId'],
+    },
+  },
+  {
+    name: 'get_permit_searches',
+    description: 'Get recent permit search results and their status',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Number of searches to return (default 10)',
+        },
+        status: {
+          type: 'string',
+          description:
+            'Filter by status (PENDING, SEARCHING, ENRICHING, COMPLETED, FAILED)',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_contacts',
+    description:
+      'List contacts from the database with optional filters. Returns contractors/leads.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        search: {
+          type: 'string',
+          description: 'Search by name, email, or company',
+        },
+        status: {
+          type: 'string',
+          description:
+            'Filter by status (NEW, VALIDATED, IN_SEQUENCE, REPLIED, etc.)',
+        },
+        city: { type: 'string', description: 'Filter by city' },
+        state: { type: 'string', description: 'Filter by state' },
+        hasReplied: {
+          type: 'boolean',
+          description: 'Filter by whether contact has replied',
+        },
+        page: { type: 'number', description: 'Page number (default 1)' },
+        limit: {
+          type: 'number',
+          description: 'Results per page (default 20)',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_contact',
+    description: 'Get detailed information about a specific contact by ID',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+      },
+      required: ['contactId'],
+    },
+  },
+  {
+    name: 'list_campaigns',
+    description:
+      'List email/outreach campaigns with their status and stats',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          description:
+            'Filter by status (DRAFT, ACTIVE, PAUSED, COMPLETED)',
+        },
+        channel: {
+          type: 'string',
+          description: 'Filter by channel (EMAIL, SMS, LINKEDIN)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of campaigns to return',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_campaign_analytics',
+    description:
+      'Get analytics for a specific campaign including enrollment count, reply rate, etc.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        campaignId: { type: 'string', description: 'The campaign ID' },
+      },
+      required: ['campaignId'],
+    },
+  },
+  {
+    name: 'list_homeowners',
+    description:
+      'List homeowners pulled from permit data with optional filters',
+    input_schema: {
+      type: 'object',
+      properties: {
+        search: {
+          type: 'string',
+          description: 'Search by name, email, or address',
+        },
+        city: { type: 'string', description: 'Filter by city' },
+        state: { type: 'string', description: 'Filter by state' },
+        status: { type: 'string', description: 'Filter by status' },
+        page: { type: 'number', description: 'Page number' },
+        limit: { type: 'number', description: 'Results per page' },
+      },
+    },
+  },
+  {
+    name: 'get_metrics',
+    description:
+      'Get daily metrics and analytics for the outreach pipeline',
+    input_schema: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'number',
+          description:
+            'Number of days of metrics to retrieve (default 7)',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_activity_log',
+    description:
+      'Get recent activity log entries showing what happened in the system',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Number of activities to return (default 20)',
+        },
+        action: {
+          type: 'string',
+          description: 'Filter by action type',
+        },
+        contactId: {
+          type: 'string',
+          description: 'Filter by contact ID',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_settings',
+    description:
+      'Get current system settings including pipeline controls, scraper settings, and schedule configuration',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'update_settings',
+    description:
+      'Update system settings. Can toggle pipeline controls, update scraper settings, etc.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pipelineEnabled: {
+          type: 'boolean',
+          description: 'Enable/disable the entire pipeline',
+        },
+        emailOutreachEnabled: {
+          type: 'boolean',
+          description: 'Enable/disable email outreach',
+        },
+        smsOutreachEnabled: {
+          type: 'boolean',
+          description: 'Enable/disable SMS outreach',
+        },
+        schedulerEnabled: {
+          type: 'boolean',
+          description: 'Enable/disable the job scheduler',
+        },
+        scrapeJobEnabled: {
+          type: 'boolean',
+          description: 'Enable/disable the scraper job',
+        },
+        enrichJobEnabled: {
+          type: 'boolean',
+          description: 'Enable/disable the enrichment job',
+        },
+        shovelsPermitTypes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Permit types to search for',
+        },
+        shovelsLocations: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Locations to search permits in',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_pipeline_status',
+    description:
+      'Get the current status of the data pipeline including which jobs are running and their progress',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'get_contact_stats',
+    description:
+      'Get aggregate statistics about contacts (total, by status, validation rates, etc.)',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+
+  // ==================== CONTACT TOOLS (7 new) ====================
+  {
+    name: 'create_contact',
+    description:
+      'Create a new contact/lead in the database with the provided information.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        firstName: { type: 'string', description: 'First name of the contact' },
+        lastName: { type: 'string', description: 'Last name of the contact' },
+        email: { type: 'string', description: 'Email address' },
+        phone: { type: 'string', description: 'Phone number' },
+        city: { type: 'string', description: 'City' },
+        state: { type: 'string', description: 'State' },
+        source: { type: 'string', description: 'Lead source (e.g., manual, csv, apollo)' },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tags to assign to the contact',
+        },
+      },
+      required: ['firstName', 'lastName'],
+    },
+  },
+  {
+    name: 'update_contact',
+    description:
+      'Update an existing contact by ID. Only provided fields will be updated.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID to update' },
+        firstName: { type: 'string', description: 'First name' },
+        lastName: { type: 'string', description: 'Last name' },
+        email: { type: 'string', description: 'Email address' },
+        phone: { type: 'string', description: 'Phone number' },
+        city: { type: 'string', description: 'City' },
+        state: { type: 'string', description: 'State' },
+        title: { type: 'string', description: 'Job title' },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tags to assign',
+        },
+        status: {
+          type: 'string',
+          description: 'Contact status (NEW, VALIDATED, IN_SEQUENCE, REPLIED, etc.)',
+        },
+      },
+      required: ['contactId'],
+    },
+  },
+  {
+    name: 'delete_contact',
+    description: 'Delete a contact from the database by ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID to delete' },
+      },
+      required: ['contactId'],
+    },
+  },
+  {
+    name: 'export_contacts',
+    description:
+      'Export contacts to CSV format. Returns a summary with record count and the CSV data.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          description: 'Filter by contact status',
+        },
+        city: { type: 'string', description: 'Filter by city' },
+        state: { type: 'string', description: 'Filter by state' },
+        hasReplied: {
+          type: 'boolean',
+          description: 'Filter by reply status',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Filter by tags',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_contact_replies',
+    description:
+      'Get all replies received from a specific contact, including channel and content.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+        limit: { type: 'number', description: 'Max replies to return (default 20)' },
+      },
+      required: ['contactId'],
+    },
+  },
+  {
+    name: 'get_contact_activity',
+    description:
+      'Get activity log entries for a specific contact showing all interactions and events.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+        limit: { type: 'number', description: 'Max activities to return (default 50)' },
+      },
+      required: ['contactId'],
+    },
+  },
+  {
+    name: 'send_sms',
+    description:
+      'Send an SMS message to a contact via GoHighLevel. Supports {{variable}} template placeholders.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID to send SMS to' },
+        message: { type: 'string', description: 'The SMS message body. Supports {{firstName}}, {{lastName}}, {{company}} variables.' },
+        campaignId: { type: 'string', description: 'Optional campaign ID to associate with the message' },
+      },
+      required: ['contactId', 'message'],
+    },
+  },
+
+  // ==================== CAMPAIGN TOOLS (4 new) ====================
+  {
+    name: 'enroll_contacts',
+    description:
+      'Enroll one or more contacts into a campaign. Skips already-enrolled and ineligible contacts.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        campaignId: { type: 'string', description: 'The campaign ID to enroll contacts in' },
+        contactIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of contact IDs to enroll',
+        },
+      },
+      required: ['campaignId', 'contactIds'],
+    },
+  },
+  {
+    name: 'stop_enrollment',
+    description:
+      'Stop a specific contact\'s enrollment in a campaign.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        campaignId: { type: 'string', description: 'The campaign ID' },
+        contactId: { type: 'string', description: 'The contact ID to stop enrollment for' },
+        reason: { type: 'string', description: 'Reason for stopping (default: manual_stop)' },
+      },
+      required: ['campaignId', 'contactId'],
+    },
+  },
+  {
+    name: 'get_campaign_enrollments',
+    description:
+      'Get enrollments for a campaign with optional status filter.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        campaignId: { type: 'string', description: 'The campaign ID' },
+        status: {
+          type: 'string',
+          description: 'Filter by enrollment status (ENROLLED, SENT, OPENED, CLICKED, REPLIED, BOUNCED, STOPPED, UNSUBSCRIBED)',
+        },
+        limit: { type: 'number', description: 'Max enrollments to return (default 50)' },
+      },
+      required: ['campaignId'],
+    },
+  },
+  {
+    name: 'sync_campaigns',
+    description:
+      'Sync campaigns from Instantly. Creates local records for new Instantly campaigns and updates existing ones.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+
+  // ==================== TEMPLATE TOOLS (4 new) ====================
+  {
+    name: 'list_templates',
+    description:
+      'List message templates with optional channel and active status filters.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel: {
+          type: 'string',
+          description: 'Filter by channel (SMS, EMAIL)',
+        },
+        isActive: {
+          type: 'boolean',
+          description: 'Filter by active status',
+        },
+        limit: { type: 'number', description: 'Max templates to return (default 50)' },
+      },
+    },
+  },
+  {
+    name: 'create_template',
+    description:
+      'Create a new message template for SMS or Email outreach.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Template name' },
+        channel: { type: 'string', description: 'Channel: SMS or EMAIL' },
+        subject: { type: 'string', description: 'Email subject line (only for EMAIL channel)' },
+        body: { type: 'string', description: 'Message body. Supports {{variable}} placeholders.' },
+        description: { type: 'string', description: 'Optional description of the template' },
+        isDefault: { type: 'boolean', description: 'Set as default template for this channel' },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tags for organizing templates',
+        },
+      },
+      required: ['name', 'channel', 'body'],
+    },
+  },
+  {
+    name: 'update_template',
+    description:
+      'Update an existing message template by ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        templateId: { type: 'string', description: 'The template ID to update' },
+        name: { type: 'string', description: 'Template name' },
+        subject: { type: 'string', description: 'Email subject line' },
+        body: { type: 'string', description: 'Message body' },
+        description: { type: 'string', description: 'Template description' },
+        isActive: { type: 'boolean', description: 'Active status' },
+        isDefault: { type: 'boolean', description: 'Set as default for this channel' },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tags for organizing templates',
+        },
+      },
+      required: ['templateId'],
+    },
+  },
+  {
+    name: 'delete_template',
+    description: 'Delete a message template by ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        templateId: { type: 'string', description: 'The template ID to delete' },
+      },
+      required: ['templateId'],
+    },
+  },
+
+  // ==================== ROUTING RULE TOOLS (4 new) ====================
+  {
+    name: 'list_routing_rules',
+    description:
+      'List campaign routing rules. Rules determine which campaign a contact is enrolled in based on filters.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        isActive: { type: 'boolean', description: 'Filter by active status' },
+        campaignId: { type: 'string', description: 'Filter by target campaign ID' },
+      },
+    },
+  },
+  {
+    name: 'create_routing_rule',
+    description:
+      'Create a new campaign routing rule. Routes contacts to campaigns based on source, state, industry, tags, and company size filters.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Rule name' },
+        description: { type: 'string', description: 'Rule description' },
+        priority: { type: 'number', description: 'Priority (higher = evaluated first, default 0)' },
+        isActive: { type: 'boolean', description: 'Whether the rule is active (default true)' },
+        matchMode: { type: 'string', description: 'Match mode: ALL (AND logic) or ANY (OR logic). Default ALL.' },
+        sourceFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Match contacts from these sources (e.g., apollo, google_maps)',
+        },
+        industryFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Match contacts in these industries',
+        },
+        stateFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Match contacts in these states',
+        },
+        countryFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Match contacts in these countries',
+        },
+        tagsFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Match contacts with any of these tags',
+        },
+        employeesMinFilter: { type: 'number', description: 'Minimum company size' },
+        employeesMaxFilter: { type: 'number', description: 'Maximum company size' },
+        campaignId: { type: 'string', description: 'Target campaign ID to route matching contacts to' },
+      },
+      required: ['name', 'campaignId'],
+    },
+  },
+  {
+    name: 'update_routing_rule',
+    description:
+      'Update an existing campaign routing rule by ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ruleId: { type: 'string', description: 'The routing rule ID to update' },
+        name: { type: 'string', description: 'Rule name' },
+        description: { type: 'string', description: 'Rule description' },
+        priority: { type: 'number', description: 'Priority' },
+        isActive: { type: 'boolean', description: 'Active status' },
+        matchMode: { type: 'string', description: 'Match mode: ALL or ANY' },
+        sourceFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Source filter values',
+        },
+        industryFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Industry filter values',
+        },
+        stateFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'State filter values',
+        },
+        countryFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Country filter values',
+        },
+        tagsFilter: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tags filter values',
+        },
+        employeesMinFilter: { type: 'number', description: 'Minimum company size' },
+        employeesMaxFilter: { type: 'number', description: 'Maximum company size' },
+        campaignId: { type: 'string', description: 'Target campaign ID' },
+      },
+      required: ['ruleId'],
+    },
+  },
+  {
+    name: 'delete_routing_rule',
+    description: 'Delete a campaign routing rule by ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ruleId: { type: 'string', description: 'The routing rule ID to delete' },
+      },
+      required: ['ruleId'],
+    },
+  },
+
+  // ==================== JOB/PIPELINE TOOLS (4 new) ====================
+  {
+    name: 'trigger_job',
+    description:
+      'Manually trigger a pipeline job. Jobs include: shovels (permit scraping), homeowner (homeowner scraping), connection (resolve contractor-homeowner connections), enrich, merge, validate, enroll (auto-enrollment).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        jobName: {
+          type: 'string',
+          description: 'Job to trigger: shovels, homeowner, connection, enrich, merge, validate, or enroll',
+        },
+        useQueue: {
+          type: 'boolean',
+          description: 'If true, adds to background queue and returns immediately. If false, runs synchronously (default false).',
+        },
+      },
+      required: ['jobName'],
+    },
+  },
+  {
+    name: 'emergency_stop',
+    description:
+      'Emergency stop: immediately disables all outreach, pipeline, and scheduled jobs. Use only when something needs to be stopped urgently.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        stoppedBy: {
+          type: 'string',
+          description: 'Who/what triggered the stop (default: jerry_ai)',
+        },
+      },
+    },
+  },
+  {
+    name: 'resume_pipeline',
+    description:
+      'Resume the pipeline after an emergency stop. Re-enables outreach, scheduling, and all jobs.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'get_job_history',
+    description:
+      'Get execution history of automation jobs. Shows recent runs with status, record counts, and timing.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        jobType: {
+          type: 'string',
+          description: 'Filter by job type: SHOVELS_SCRAPE, HOMEOWNER_SCRAPE, CONNECTION_RESOLVE, ENRICH, MERGE, VALIDATE, AUTO_ENROLL',
+        },
+        limit: { type: 'number', description: 'Max entries to return (default 50)' },
+      },
+    },
+  },
+
+  // ==================== HOMEOWNER/CONNECTION TOOLS (4 new) ====================
+  {
+    name: 'delete_homeowner',
+    description: 'Delete a homeowner record from the database by ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        homeownerId: { type: 'string', description: 'The homeowner ID to delete' },
+      },
+      required: ['homeownerId'],
+    },
+  },
+  {
+    name: 'enrich_homeowners',
+    description:
+      'Trigger Realie property enrichment for homeowners that haven\'t been enriched yet. Enriches property data like assessed value, AVM, bedrooms, etc.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        batchSize: {
+          type: 'number',
+          description: 'Number of homeowners to enrich in this batch (default 50)',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_connections',
+    description:
+      'List contractor-homeowner connections (links between contacts and homeowners via permits).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        search: { type: 'string', description: 'Search by name, email, or address' },
+        permitType: { type: 'string', description: 'Filter by permit type' },
+        city: { type: 'string', description: 'Filter by city' },
+        state: { type: 'string', description: 'Filter by state' },
+        page: { type: 'number', description: 'Page number (default 1)' },
+        limit: { type: 'number', description: 'Results per page (default 25)' },
+      },
+    },
+  },
+  {
+    name: 'resolve_connections',
+    description:
+      'Resolve contractor-homeowner connections by matching permits to contractors in the database. Processes homeowners that don\'t yet have connections.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        batchSize: {
+          type: 'number',
+          description: 'Number of homeowners to process (default 50)',
+        },
+      },
+    },
+  },
+
+  // ==================== SYSTEM TOOLS (2 new) ====================
+  {
+    name: 'check_system_health',
+    description:
+      'Check the health of system integrations including database, Redis, and pipeline status.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'toggle_linkedin',
+    description:
+      'Enable or disable LinkedIn outreach globally across all campaigns.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'True to enable LinkedIn, false to disable',
+        },
+      },
+      required: ['enabled'],
+    },
+  },
+
+  // ==================== WORKFLOW TOOLS (3 new - Phase 3E) ====================
+  {
+    name: 'create_workflow',
+    description:
+      'Create and start a multi-step workflow. Each step can perform an action with parameters, handle failures, and have conditions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Workflow name' },
+        steps: {
+          type: 'array',
+          description: 'Array of workflow steps to execute in order',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Step name' },
+              action: { type: 'string', description: 'Action to perform (tool name or custom action)' },
+              params: {
+                type: 'object',
+                description: 'Parameters for the action',
+              },
+              onFailure: {
+                type: 'string',
+                description: 'What to do on failure: skip, stop, or retry (default: stop)',
+              },
+              condition: {
+                type: 'string',
+                description: 'Optional condition expression to evaluate before running this step',
+              },
+            },
+            required: ['name', 'action'],
+          },
+        },
+      },
+      required: ['name', 'steps'],
+    },
+  },
+  {
+    name: 'get_workflow_status',
+    description:
+      'Get the status and step details of a workflow by ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        workflowId: { type: 'string', description: 'The workflow ID' },
+      },
+      required: ['workflowId'],
+    },
+  },
+  {
+    name: 'cancel_workflow',
+    description: 'Cancel a running workflow by ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        workflowId: { type: 'string', description: 'The workflow ID to cancel' },
+      },
+      required: ['workflowId'],
+    },
+  },
+];
+
+// Tool execution map
+export async function executeTool(
+  name: string,
+  input: Record<string, any>,
+  context?: ToolContext
+): Promise<ToolResult> {
+  logger.info(`Executing tool: ${name}`, { input });
+
+  try {
+    switch (name) {
+      // ==================== EXISTING TOOLS ====================
+
+      case 'search_permits': {
+        const startDate = input.startDate || new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString().split('T')[0];
+        const endDate = input.endDate || new Date().toISOString().split('T')[0];
+
+        // Create the record first so we can return the ID immediately
+        const search = await prisma.permitSearch.create({
+          data: {
+            permitType: input.permitType,
+            city: input.city,
+            geoId: input.geoId,
+            startDate: new Date(startDate),
+            endDate: new Date(endDate),
+            status: 'PENDING',
+            conversationId: context?.conversationId || null,
+          },
+        });
+
+        // Kick off the pipeline in the background using the existing record
+        permitPipelineService.startSearch({
+          permitType: input.permitType,
+          city: input.city,
+          geoId: input.geoId,
+          startDate,
+          endDate,
+          conversationId: context?.conversationId,
+        }, search.id).catch(err => {
+          logger.error({ err: err.message, searchId: search.id }, 'Permit pipeline failed');
+        });
+
+        return {
+          success: true,
+          data: {
+            searchId: search.id,
+            status: 'SEARCHING',
+            message: `Permit search started for ${input.permitType} permits in ${input.city}. The search is running in the background — you'll be notified when it completes.`,
+          },
+        };
+      }
+
+      case 'get_permit_searches': {
+        const limit = input.limit || 10;
+        const where: Record<string, any> = {};
+        if (input.status) {
+          where.status = input.status;
+        }
+        const searches = await prisma.permitSearch.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          select: {
+            id: true,
+            permitType: true,
+            city: true,
+            geoId: true,
+            status: true,
+            totalFound: true,
+            totalEnriched: true,
+            startDate: true,
+            endDate: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
+        return { success: true, data: searches };
+      }
+
+      case 'list_contacts': {
+        const page = input.page || 1;
+        const limit = input.limit || 20;
+        const skip = (page - 1) * limit;
+        const where: Record<string, any> = {};
+
+        if (input.search) {
+          where.OR = [
+            { firstName: { contains: input.search, mode: 'insensitive' } },
+            { lastName: { contains: input.search, mode: 'insensitive' } },
+            { email: { contains: input.search, mode: 'insensitive' } },
+            {
+              company: {
+                name: { contains: input.search, mode: 'insensitive' },
+              },
+            },
+          ];
+        }
+        if (input.status) where.status = input.status;
+        if (input.city) where.city = input.city;
+        if (input.state) where.state = input.state;
+        if (input.hasReplied !== undefined) where.hasReplied = input.hasReplied;
+
+        const [contacts, total] = await Promise.all([
+          prisma.contact.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            skip,
+            take: limit,
+            include: { company: true },
+          }),
+          prisma.contact.count({ where }),
+        ]);
+
+        return {
+          success: true,
+          data: {
+            contacts,
+            pagination: {
+              page,
+              limit,
+              total,
+              totalPages: Math.ceil(total / limit),
+            },
+          },
+        };
+      }
+
+      case 'get_contact': {
+        const contact = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+          include: {
+            company: true,
+            activityLogs: {
+              orderBy: { createdAt: 'desc' },
+              take: 10,
+            },
+          },
+        });
+        if (!contact) {
+          return {
+            success: false,
+            error: `Contact not found with ID: ${input.contactId}`,
+          };
+        }
+        return { success: true, data: contact };
+      }
+
+      case 'list_campaigns': {
+        const where: Record<string, any> = {};
+        if (input.status) where.status = input.status;
+        if (input.channel) where.channel = input.channel;
+
+        const campaigns = await prisma.campaign.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: input.limit || 20,
+          include: {
+            _count: {
+              select: { enrollments: true },
+            },
+          },
+        });
+        return { success: true, data: campaigns };
+      }
+
+      case 'get_campaign_analytics': {
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+          include: {
+            _count: {
+              select: { enrollments: true },
+            },
+          },
+        });
+        if (!campaign) {
+          return {
+            success: false,
+            error: `Campaign not found with ID: ${input.campaignId}`,
+          };
+        }
+
+        const enrollmentStats = await prisma.campaignEnrollment.groupBy({
+          by: ['status'],
+          where: { campaignId: input.campaignId },
+          _count: { status: true },
+        });
+
+        return {
+          success: true,
+          data: {
+            campaign,
+            enrollmentStats: enrollmentStats.map((s: any) => ({
+              status: s.status,
+              count: s._count.status,
+            })),
+          },
+        };
+      }
+
+      case 'list_homeowners': {
+        const page = input.page || 1;
+        const limit = input.limit || 20;
+        const skip = (page - 1) * limit;
+        const where: Record<string, any> = {};
+
+        if (input.search) {
+          where.OR = [
+            { firstName: { contains: input.search, mode: 'insensitive' } },
+            { lastName: { contains: input.search, mode: 'insensitive' } },
+            { email: { contains: input.search, mode: 'insensitive' } },
+            { street: { contains: input.search, mode: 'insensitive' } },
+          ];
+        }
+        if (input.city) where.city = input.city;
+        if (input.state) where.state = input.state;
+        if (input.status) where.status = input.status;
+
+        const [homeowners, total] = await Promise.all([
+          prisma.homeowner.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            skip,
+            take: limit,
+          }),
+          prisma.homeowner.count({ where }),
+        ]);
+
+        return {
+          success: true,
+          data: {
+            homeowners,
+            pagination: {
+              page,
+              limit,
+              total,
+              totalPages: Math.ceil(total / limit),
+            },
+          },
+        };
+      }
+
+      case 'get_metrics': {
+        const days = input.days || 7;
+        const since = new Date();
+        since.setDate(since.getDate() - days);
+
+        const metrics = await prisma.dailyMetrics.findMany({
+          where: { date: { gte: since } },
+          orderBy: { date: 'desc' },
+        });
+        return { success: true, data: metrics };
+      }
+
+      case 'get_activity_log': {
+        const limit = input.limit || 20;
+        const where: Record<string, any> = {};
+        if (input.action) where.action = input.action;
+        if (input.contactId) where.contactId = input.contactId;
+
+        const activities = await prisma.activityLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: limit,
+          include: { contact: true },
+        });
+        return { success: true, data: activities };
+      }
+
+      case 'get_settings': {
+        const settings = await prisma.settings.findFirst();
+        if (!settings) {
+          return { success: false, error: 'No settings found' };
+        }
+        return { success: true, data: settings };
+      }
+
+      case 'update_settings': {
+        const settings = await prisma.settings.findFirst();
+        if (!settings) {
+          return { success: false, error: 'No settings found to update' };
+        }
+
+        const updateData: Record<string, any> = {};
+        const allowedFields = [
+          'pipelineEnabled',
+          'emailOutreachEnabled',
+          'smsOutreachEnabled',
+          'schedulerEnabled',
+          'scrapeJobEnabled',
+          'enrichJobEnabled',
+          'shovelsPermitTypes',
+          'shovelsLocations',
+        ];
+
+        for (const field of allowedFields) {
+          if (input[field] !== undefined) {
+            updateData[field] = input[field];
+          }
+        }
+
+        if (Object.keys(updateData).length === 0) {
+          return { success: false, error: 'No valid fields provided to update' };
+        }
+
+        const updated = await prisma.settings.update({
+          where: { id: settings.id },
+          data: updateData,
+        });
+
+        return {
+          success: true,
+          data: {
+            updated,
+            message: `Settings updated: ${Object.keys(updateData).join(', ')}`,
+          },
+        };
+      }
+
+      case 'get_pipeline_status': {
+        const settings = await prisma.settings.findFirst();
+        const recentMetrics = await prisma.dailyMetrics.findFirst({
+          orderBy: { date: 'desc' },
+        });
+        const recentSearches = await prisma.permitSearch.findMany({
+          where: {
+            status: { in: ['PENDING', 'SEARCHING', 'ENRICHING'] },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+        });
+
+        return {
+          success: true,
+          data: {
+            controls: {
+              pipelineEnabled: settings?.pipelineEnabled ?? false,
+              emailOutreachEnabled: settings?.emailOutreachEnabled ?? false,
+              smsOutreachEnabled: settings?.smsOutreachEnabled ?? false,
+              schedulerEnabled: settings?.schedulerEnabled ?? false,
+              scrapeJobEnabled: settings?.scrapeJobEnabled ?? false,
+              enrichJobEnabled: settings?.enrichJobEnabled ?? false,
+            },
+            latestMetrics: recentMetrics,
+            activeSearches: recentSearches,
+          },
+        };
+      }
+
+      case 'get_contact_stats': {
+        const [total, byStatus, repliedCount, validatedCount] =
+          await Promise.all([
+            prisma.contact.count(),
+            prisma.contact.groupBy({
+              by: ['status'],
+              _count: { status: true },
+            }),
+            prisma.contact.count({ where: { hasReplied: true } }),
+            prisma.contact.count({
+              where: { status: 'VALIDATED' },
+            }),
+          ]);
+
+        return {
+          success: true,
+          data: {
+            total,
+            byStatus: byStatus.map((s) => ({
+              status: s.status,
+              count: s._count.status,
+            })),
+            repliedCount,
+            validatedCount,
+            replyRate: total > 0 ? ((repliedCount / total) * 100).toFixed(1) + '%' : '0%',
+            validationRate:
+              total > 0 ? ((validatedCount / total) * 100).toFixed(1) + '%' : '0%',
+          },
+        };
+      }
+
+      // ==================== CONTACT TOOLS ====================
+
+      case 'create_contact': {
+        const contactData: Record<string, any> = {
+          firstName: input.firstName,
+          lastName: input.lastName,
+          fullName: `${input.firstName} ${input.lastName}`.trim(),
+          status: 'NEW',
+        };
+        if (input.email) contactData.email = input.email;
+        if (input.phone) contactData.phone = input.phone;
+        if (input.city) contactData.city = input.city;
+        if (input.state) contactData.state = input.state;
+        if (input.source) contactData.source = input.source;
+        if (input.tags) contactData.tags = input.tags;
+
+        const newContact = await prisma.contact.create({
+          data: contactData,
+        });
+
+        // Log the creation
+        await prisma.activityLog.create({
+          data: {
+            contactId: newContact.id,
+            action: 'CONTACT_CREATED',
+            description: `Contact ${newContact.fullName} created via Jerry AI`,
+            actorType: 'ai',
+          },
+        });
+
+        return {
+          success: true,
+          data: {
+            contact: newContact,
+            message: `Contact ${newContact.fullName} created successfully.`,
+          },
+        };
+      }
+
+      case 'update_contact': {
+        const existing = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+        });
+        if (!existing) {
+          return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+        }
+
+        const updateFields: Record<string, any> = {};
+        const allowedContactFields = [
+          'firstName', 'lastName', 'email', 'phone', 'city', 'state', 'title', 'tags', 'status',
+        ];
+        for (const field of allowedContactFields) {
+          if (input[field] !== undefined) {
+            updateFields[field] = input[field];
+          }
+        }
+        // Update fullName if first or last name changed
+        if (input.firstName || input.lastName) {
+          updateFields.fullName = `${input.firstName ?? existing.firstName ?? ''} ${input.lastName ?? existing.lastName ?? ''}`.trim();
+        }
+
+        if (Object.keys(updateFields).length === 0) {
+          return { success: false, error: 'No valid fields provided to update' };
+        }
+
+        const updatedContact = await prisma.contact.update({
+          where: { id: input.contactId },
+          data: updateFields,
+        });
+
+        await prisma.activityLog.create({
+          data: {
+            contactId: input.contactId,
+            action: 'CONTACT_UPDATED',
+            description: `Contact updated fields: ${Object.keys(updateFields).join(', ')}`,
+            actorType: 'ai',
+            metadata: updateFields,
+          },
+        });
+
+        return {
+          success: true,
+          data: {
+            contact: updatedContact,
+            message: `Contact updated: ${Object.keys(updateFields).join(', ')}`,
+          },
+        };
+      }
+
+      case 'delete_contact': {
+        const toDelete = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+          select: { id: true, fullName: true, email: true },
+        });
+        if (!toDelete) {
+          return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+        }
+
+        await prisma.contact.delete({ where: { id: input.contactId } });
+
+        return {
+          success: true,
+          data: {
+            message: `Contact ${toDelete.fullName || toDelete.email || input.contactId} deleted successfully.`,
+          },
+        };
+      }
+
+      case 'export_contacts': {
+        const filters: Record<string, any> = {};
+        if (input.status) filters.status = [input.status];
+        if (input.city) filters.search = input.city;
+        if (input.state) filters.search = input.state;
+        if (input.hasReplied !== undefined) filters.hasReplied = input.hasReplied;
+        if (input.tags) filters.tags = input.tags;
+
+        const csv = await contactExportService.exportToCSV(filters);
+        const lineCount = csv.split('\n').length - 1; // subtract header
+
+        return {
+          success: true,
+          data: {
+            recordCount: lineCount,
+            filename: contactExportService.getFilename(),
+            csvPreview: csv.substring(0, 1000) + (csv.length > 1000 ? '\n... (truncated)' : ''),
+            totalSize: csv.length,
+            message: `Exported ${lineCount} contacts to CSV.`,
+          },
+        };
+      }
+
+      case 'get_contact_replies': {
+        const replies = await prisma.reply.findMany({
+          where: { contactId: input.contactId },
+          orderBy: { receivedAt: 'desc' },
+          take: input.limit || 20,
+        });
+
+        return {
+          success: true,
+          data: {
+            replies,
+            total: replies.length,
+            contactId: input.contactId,
+          },
+        };
+      }
+
+      case 'get_contact_activity': {
+        const contactActivities = await prisma.activityLog.findMany({
+          where: { contactId: input.contactId },
+          orderBy: { createdAt: 'desc' },
+          take: input.limit || 50,
+        });
+
+        return {
+          success: true,
+          data: {
+            activities: contactActivities,
+            total: contactActivities.length,
+            contactId: input.contactId,
+          },
+        };
+      }
+
+      case 'send_sms': {
+        const smsResult = await smsOutreachService.sendSMS({
+          contactId: input.contactId,
+          message: input.message,
+          campaignId: input.campaignId,
+        });
+
+        if (!smsResult.success) {
+          return { success: false, error: smsResult.error || 'Failed to send SMS' };
+        }
+
+        // Log activity
+        await prisma.activityLog.create({
+          data: {
+            contactId: input.contactId,
+            action: 'SMS_SENT',
+            channel: 'SMS',
+            description: `SMS sent via Jerry AI`,
+            actorType: 'ai',
+            metadata: {
+              conversationId: smsResult.conversationId,
+              messageId: smsResult.messageId,
+            },
+          },
+        });
+
+        return {
+          success: true,
+          data: {
+            conversationId: smsResult.conversationId,
+            messageId: smsResult.messageId,
+            message: 'SMS sent successfully.',
+          },
+        };
+      }
+
+      // ==================== CAMPAIGN TOOLS ====================
+
+      case 'enroll_contacts': {
+        const enrollResult = await campaignService.enrollContacts(
+          input.campaignId,
+          input.contactIds
+        );
+
+        return {
+          success: true,
+          data: {
+            enrolled: enrollResult.enrolled,
+            skipped: enrollResult.skipped,
+            errors: enrollResult.errors,
+            message: `Enrolled ${enrollResult.enrolled} contacts, skipped ${enrollResult.skipped}.`,
+          },
+        };
+      }
+
+      case 'stop_enrollment': {
+        await campaignService.stopEnrollment(
+          input.campaignId,
+          input.contactId,
+          input.reason || 'manual_stop'
+        );
+
+        return {
+          success: true,
+          data: {
+            message: `Enrollment stopped for contact ${input.contactId} in campaign ${input.campaignId}.`,
+          },
+        };
+      }
+
+      case 'get_campaign_enrollments': {
+        const enrollmentResult = await campaignService.getEnrollments(
+          input.campaignId,
+          {
+            status: input.status,
+            limit: input.limit || 50,
+          }
+        );
+
+        return {
+          success: true,
+          data: {
+            enrollments: enrollmentResult.enrollments,
+            total: enrollmentResult.total,
+            campaignId: input.campaignId,
+          },
+        };
+      }
+
+      case 'sync_campaigns': {
+        const syncResult = await campaignService.syncFromInstantly();
+
+        return {
+          success: true,
+          data: {
+            created: syncResult.created,
+            updated: syncResult.updated,
+            totalCampaigns: syncResult.campaigns.length,
+            campaigns: syncResult.campaigns.map((c) => ({
+              id: c.id,
+              name: c.name,
+              status: c.status,
+              channel: c.channel,
+            })),
+            message: `Synced ${syncResult.campaigns.length} campaigns from Instantly (${syncResult.created} new, ${syncResult.updated} updated).`,
+          },
+        };
+      }
+
+      // ==================== TEMPLATE TOOLS ====================
+
+      case 'list_templates': {
+        const templateFilters: Record<string, any> = {};
+        if (input.channel) templateFilters.channel = input.channel;
+        if (input.isActive !== undefined) templateFilters.isActive = input.isActive;
+        if (input.limit) templateFilters.limit = input.limit;
+
+        const templateResult = await messageTemplateService.listTemplates(templateFilters);
+
+        return {
+          success: true,
+          data: {
+            templates: templateResult.templates,
+            total: templateResult.total,
+          },
+        };
+      }
+
+      case 'create_template': {
+        const newTemplate = await messageTemplateService.createTemplate({
+          name: input.name,
+          channel: input.channel,
+          subject: input.subject,
+          body: input.body,
+          description: input.description,
+          isDefault: input.isDefault,
+          tags: input.tags,
+        });
+
+        return {
+          success: true,
+          data: {
+            template: newTemplate,
+            message: `Template "${newTemplate.name}" created successfully.`,
+          },
+        };
+      }
+
+      case 'update_template': {
+        const templateUpdateData: Record<string, any> = {};
+        const allowedTemplateFields = ['name', 'subject', 'body', 'description', 'isActive', 'isDefault', 'tags'];
+        for (const field of allowedTemplateFields) {
+          if (input[field] !== undefined) {
+            templateUpdateData[field] = input[field];
+          }
+        }
+
+        if (Object.keys(templateUpdateData).length === 0) {
+          return { success: false, error: 'No valid fields provided to update' };
+        }
+
+        const updatedTemplate = await messageTemplateService.updateTemplate(
+          input.templateId,
+          templateUpdateData
+        );
+
+        return {
+          success: true,
+          data: {
+            template: updatedTemplate,
+            message: `Template updated: ${Object.keys(templateUpdateData).join(', ')}`,
+          },
+        };
+      }
+
+      case 'delete_template': {
+        await messageTemplateService.deleteTemplate(input.templateId);
+
+        return {
+          success: true,
+          data: {
+            message: `Template ${input.templateId} deleted successfully.`,
+          },
+        };
+      }
+
+      // ==================== ROUTING RULE TOOLS ====================
+
+      case 'list_routing_rules': {
+        const ruleFilters: Record<string, any> = {};
+        if (input.isActive !== undefined) ruleFilters.isActive = input.isActive;
+        if (input.campaignId) ruleFilters.campaignId = input.campaignId;
+
+        const rules = await campaignRoutingService.listRules(ruleFilters);
+
+        return {
+          success: true,
+          data: {
+            rules,
+            total: rules.length,
+          },
+        };
+      }
+
+      case 'create_routing_rule': {
+        const newRule = await campaignRoutingService.createRule({
+          name: input.name,
+          description: input.description,
+          priority: input.priority,
+          isActive: input.isActive,
+          matchMode: input.matchMode,
+          sourceFilter: input.sourceFilter,
+          industryFilter: input.industryFilter,
+          stateFilter: input.stateFilter,
+          countryFilter: input.countryFilter,
+          tagsFilter: input.tagsFilter,
+          employeesMinFilter: input.employeesMinFilter,
+          employeesMaxFilter: input.employeesMaxFilter,
+          campaignId: input.campaignId,
+        });
+
+        return {
+          success: true,
+          data: {
+            rule: newRule,
+            message: `Routing rule "${newRule.name}" created and targeting campaign "${newRule.campaign.name}".`,
+          },
+        };
+      }
+
+      case 'update_routing_rule': {
+        const ruleUpdateData: Record<string, any> = {};
+        const allowedRuleFields = [
+          'name', 'description', 'priority', 'isActive', 'matchMode',
+          'sourceFilter', 'industryFilter', 'stateFilter', 'countryFilter',
+          'tagsFilter', 'employeesMinFilter', 'employeesMaxFilter', 'campaignId',
+        ];
+        for (const field of allowedRuleFields) {
+          if (input[field] !== undefined) {
+            ruleUpdateData[field] = input[field];
+          }
+        }
+
+        if (Object.keys(ruleUpdateData).length === 0) {
+          return { success: false, error: 'No valid fields provided to update' };
+        }
+
+        const updatedRule = await campaignRoutingService.updateRule(
+          input.ruleId,
+          ruleUpdateData
+        );
+
+        return {
+          success: true,
+          data: {
+            rule: updatedRule,
+            message: `Routing rule "${updatedRule.name}" updated.`,
+          },
+        };
+      }
+
+      case 'delete_routing_rule': {
+        await campaignRoutingService.deleteRule(input.ruleId);
+
+        return {
+          success: true,
+          data: {
+            message: `Routing rule ${input.ruleId} deleted successfully.`,
+          },
+        };
+      }
+
+      // ==================== JOB/PIPELINE TOOLS ====================
+
+      case 'trigger_job': {
+        const validJobs = ['shovels', 'homeowner', 'connection', 'enrich', 'merge', 'validate', 'enroll'];
+        if (!validJobs.includes(input.jobName)) {
+          return {
+            success: false,
+            error: `Invalid job name: ${input.jobName}. Valid jobs: ${validJobs.join(', ')}`,
+          };
+        }
+
+        const scheduler = getScheduler();
+        if (!scheduler) {
+          return { success: false, error: 'Scheduler is not initialized. The system may still be starting up.' };
+        }
+
+        const jobResult = await scheduler.triggerJob(
+          input.jobName as any,
+          { useQueue: input.useQueue || false }
+        );
+
+        if (input.useQueue && jobResult.queued) {
+          return {
+            success: true,
+            data: {
+              queued: true,
+              jobId: jobResult.jobId,
+              message: `Job "${input.jobName}" added to queue. It will run in the background.`,
+            },
+          };
+        }
+
+        return {
+          success: true,
+          data: {
+            result: jobResult,
+            message: `Job "${input.jobName}" executed successfully.`,
+          },
+        };
+      }
+
+      case 'emergency_stop': {
+        const stoppedBy = input.stoppedBy || 'jerry_ai';
+        const stopResult = await settingsService.emergencyStop(stoppedBy);
+
+        return {
+          success: true,
+          data: {
+            controls: stopResult,
+            message: `EMERGENCY STOP executed by ${stoppedBy}. All outreach, pipeline, and scheduled jobs have been disabled.`,
+          },
+        };
+      }
+
+      case 'resume_pipeline': {
+        const resumeResult = await settingsService.resumePipeline();
+
+        return {
+          success: true,
+          data: {
+            controls: resumeResult,
+            message: 'Pipeline resumed. All outreach and jobs have been re-enabled.',
+          },
+        };
+      }
+
+      case 'get_job_history': {
+        const jobHistory = await jobLogService.getJobHistory(
+          input.jobType as any,
+          input.limit || 50
+        );
+
+        return {
+          success: true,
+          data: {
+            history: jobHistory,
+            total: jobHistory.length,
+          },
+        };
+      }
+
+      // ==================== HOMEOWNER/CONNECTION TOOLS ====================
+
+      case 'delete_homeowner': {
+        const homeowner = await prisma.homeowner.findUnique({
+          where: { id: input.homeownerId },
+          select: { id: true, fullName: true, email: true },
+        });
+        if (!homeowner) {
+          return { success: false, error: `Homeowner not found with ID: ${input.homeownerId}` };
+        }
+
+        await prisma.homeowner.delete({ where: { id: input.homeownerId } });
+
+        return {
+          success: true,
+          data: {
+            message: `Homeowner ${homeowner.fullName || homeowner.email || input.homeownerId} deleted successfully.`,
+          },
+        };
+      }
+
+      case 'enrich_homeowners': {
+        const batchSize = input.batchSize || 50;
+        const enrichResult = await realieEnrichmentService.enrichPendingHomeowners(batchSize);
+
+        return {
+          success: true,
+          data: {
+            total: enrichResult.total,
+            enriched: enrichResult.enriched,
+            notFound: enrichResult.notFound,
+            errors: enrichResult.errors,
+            message: `Enriched ${enrichResult.enriched} of ${enrichResult.total} homeowners. ${enrichResult.notFound} not found in Realie, ${enrichResult.errors} errors.`,
+          },
+        };
+      }
+
+      case 'list_connections': {
+        const connResult = await connectionService.list({
+          search: input.search,
+          permitType: input.permitType,
+          city: input.city,
+          state: input.state,
+          page: input.page || 1,
+          limit: input.limit || 25,
+        });
+
+        return {
+          success: true,
+          data: {
+            connections: connResult.data,
+            pagination: connResult.pagination,
+          },
+        };
+      }
+
+      case 'resolve_connections': {
+        const resolveResult = await connectionService.resolveConnections(
+          input.batchSize || 50
+        );
+
+        return {
+          success: true,
+          data: {
+            total: resolveResult.total,
+            connected: resolveResult.connected,
+            noContractor: resolveResult.noContractor,
+            errors: resolveResult.errors,
+            durationMs: resolveResult.duration,
+            message: `Processed ${resolveResult.total} homeowners: ${resolveResult.connected} connected, ${resolveResult.noContractor} no contractor found, ${resolveResult.errors} errors.`,
+          },
+        };
+      }
+
+      // ==================== SYSTEM TOOLS ====================
+
+      case 'check_system_health': {
+        const healthChecks: Record<string, any> = {};
+
+        // Check database
+        try {
+          await prisma.$queryRaw`SELECT 1`;
+          healthChecks.database = { status: 'healthy', message: 'Connected' };
+        } catch (dbErr: any) {
+          healthChecks.database = { status: 'unhealthy', message: dbErr.message };
+        }
+
+        // Check Redis
+        try {
+          const redisPing = await redis.ping();
+          healthChecks.redis = { status: redisPing === 'PONG' ? 'healthy' : 'unhealthy', message: redisPing };
+        } catch (redisErr: any) {
+          healthChecks.redis = { status: 'unhealthy', message: redisErr.message };
+        }
+
+        // Check pipeline settings
+        const healthSettings = await prisma.settings.findFirst();
+        healthChecks.pipeline = {
+          enabled: healthSettings?.pipelineEnabled ?? false,
+          schedulerEnabled: healthSettings?.schedulerEnabled ?? false,
+          emailOutreachEnabled: healthSettings?.emailOutreachEnabled ?? false,
+          smsOutreachEnabled: healthSettings?.smsOutreachEnabled ?? false,
+          maintenanceMode: healthSettings?.maintenanceMode ?? false,
+        };
+
+        // Check scheduler
+        const healthScheduler = getScheduler();
+        healthChecks.scheduler = {
+          initialized: !!healthScheduler,
+          ...(healthScheduler ? healthScheduler.getStatus() : { isRunning: false, jobs: [] }),
+        };
+
+        // Check recent job activity
+        const recentJobs = await prisma.importJob.findMany({
+          where: { status: 'PROCESSING' },
+          select: { id: true, type: true, status: true, startedAt: true },
+          take: 5,
+        });
+        healthChecks.activeJobs = recentJobs;
+
+        const allHealthy = healthChecks.database.status === 'healthy' && healthChecks.redis.status === 'healthy';
+
+        return {
+          success: true,
+          data: {
+            overall: allHealthy ? 'healthy' : 'degraded',
+            checks: healthChecks,
+          },
+        };
+      }
+
+      case 'toggle_linkedin': {
+        if (input.enabled) {
+          await settingsService.enableLinkedIn();
+        } else {
+          await settingsService.disableLinkedIn();
+        }
+
+        return {
+          success: true,
+          data: {
+            linkedinEnabled: input.enabled,
+            message: `LinkedIn outreach ${input.enabled ? 'enabled' : 'disabled'} globally.`,
+          },
+        };
+      }
+
+      // ==================== WORKFLOW TOOLS (Phase 3E) ====================
+
+      case 'create_workflow': {
+        const workflow = await workflowEngine.createWorkflow({
+          conversationId: input.conversationId,
+          name: input.name,
+          description: input.description,
+          steps: (input.steps || []).map((step: any) => ({
+            name: step.name,
+            action: step.action,
+            params: step.params || {},
+            onFailure: step.onFailure || 'skip',
+            condition: step.condition || undefined,
+          })),
+        });
+
+        return {
+          success: true,
+          data: {
+            workflowId: workflow.id,
+            name: workflow.name,
+            status: workflow.status,
+            totalSteps: workflow.totalSteps,
+            message: `Workflow "${workflow.name}" created with ${workflow.totalSteps} steps and queued for execution. ID: ${workflow.id}`,
+          },
+        };
+      }
+
+      case 'get_workflow_status': {
+        const workflowStatus = await workflowEngine.getWorkflowStatus(input.workflowId);
+        if (!workflowStatus) {
+          return { success: false, error: `Workflow not found with ID: ${input.workflowId}` };
+        }
+
+        return {
+          success: true,
+          data: { workflow: workflowStatus },
+        };
+      }
+
+      case 'cancel_workflow': {
+        const cancelledWorkflow = await workflowEngine.cancelWorkflow(input.workflowId);
+        if (!cancelledWorkflow) {
+          return { success: false, error: `Workflow not found with ID: ${input.workflowId}` };
+        }
+
+        return {
+          success: true,
+          data: {
+            workflowId: cancelledWorkflow.id,
+            name: cancelledWorkflow.name,
+            status: cancelledWorkflow.status,
+            message: `Workflow "${cancelledWorkflow.name}" cancelled successfully.`,
+          },
+        };
+      }
+
+      default:
+        return { success: false, error: `Unknown tool: ${name}` };
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown error occurred';
+    logger.error(`Tool execution failed: ${name}`, { error: message, input });
+    return { success: false, error: message };
+  }
+}

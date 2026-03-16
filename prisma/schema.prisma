@@ -84,6 +84,30 @@ model Contact {
   permitCity            String?
   licenseNumber         String?
   permitSearchId        String?
+
+  // Promoted permit fields (for Instantly personalization)
+  permitDate            String?
+  permitDateFriendly    String?
+  permitMonthsAgo       Int?
+  permitDescription     String?
+  permitStatus          String?
+  permitNumber          String?
+  permitJobValue        Float?
+  permitFees            Float?
+  permitJurisdiction    String?
+
+  // Promoted contractor fields
+  avgJobValue           Float?
+  totalJobValue         Float?
+  permitCount           Int?
+  revenue               String?
+  employeeCount         String?
+  website               String?
+  rating                Float?
+  reviewCount           Int?
+  seniorityLevel        String?
+  department            String?
+  tagTally              Json?
   clayEnrichmentStatus  ClayStatus            @default(PENDING)
   clayEnrichedAt        DateTime?             @db.Timestamptz(6)
   googlePlaceId         String?               @unique
@@ -94,6 +118,7 @@ model Contact {
   outreachSteps         OutreachStep[]
   replies               Reply[]
   sequenceEnrollments   SequenceEnrollment[]
+  connections           Connection[]
 
   @@index([email])
   @@index([status])
@@ -489,6 +514,21 @@ model Settings {
   shovelsEmployeeTitleInclude     String[]  @default(["Owner", "President", "CEO", "Founder", "Director", "VP", "Vice President"])
   shovelsEmployeeTitleExclude     String[]  @default(["Technician", "Installer", "Helper", "Laborer", "Apprentice"])
 
+  // Homeowner Scraper
+  homeownerJobEnabled         Boolean   @default(false)
+  homeownerJobCron            String?   @default("0 9 * * *")
+  homeownerGeoIds             String[]  @default([])
+  homeownerLocations          String[]  @default([])
+  homeownerMaxResults         Int?      @default(100)
+  homeownerRealieEnrich       Boolean   @default(true)
+  homeownerUseShovelsGeoIds   Boolean   @default(true)
+  homeownerFetchPermitDetails Boolean   @default(true)
+
+  // Connection Resolver
+  connectionJobEnabled    Boolean   @default(false)
+  connectionJobCron       String?   @default("30 9 * * *")
+  connectionBatchSize     Int?      @default(50)
+
   // Permit Routing
   permitRouteMode                String?   @default("email")
   permitEmailCampaignId          String?
@@ -497,6 +537,125 @@ model Settings {
   permitGhlSmsReplyWorkflowId    String?
   permitSmsFallbackEnabled       Boolean   @default(true)
   permitAutoRouteEnabled         Boolean   @default(false)
+}
+
+model Homeowner {
+  id                  String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  shovelsResidentId   String    @unique
+  firstName           String?
+  lastName            String?
+  fullName            String?
+  email               String?
+  phone               String?
+  street              String?
+  city                String?
+  state               String?
+  zipCode             String?
+  county              String?
+  gender              String?
+  ageRange            String?
+  isMarried           Boolean?
+  hasChildren         Boolean?
+  incomeRange         String?
+  netWorth            String?
+  education           String?
+  homeownerFlag       String?
+
+  propertyAddress     String?
+  propertyValue       String?
+  propertyType        String?
+  yearBuilt           String?
+  lotSize             String?
+  livingArea          String?
+  bedrooms            Int?
+  bathrooms           Int?
+
+  permitIds           String[]  @default([])
+  permitType          String?
+  permitCity          String?
+  geoId               String?
+
+  // Permit detail fields (fetched from Shovels permits)
+  permitDate          String?
+  permitDateFriendly  String?
+  permitMonthsAgo     Int?
+  permitDescription   String?
+  permitJobValue      Float?
+  permitStatus        String?
+  permitNumber        String?
+  permitFees          Float?
+  permitJurisdiction  String?
+
+  // Realie enrichment
+  realieEnriched      Boolean   @default(false)
+  realieEnrichedAt    DateTime? @db.Timestamptz(6)
+  assessedValue       Float?
+  taxAmount           Float?
+  avmValue            Float?
+  avmMin              Float?
+  avmMax              Float?
+  ownerName           String?
+  totalBedrooms       Int?
+  totalBathrooms      Float?
+  buildingArea        Float?
+  stories             Int?
+  hasPool             Boolean?
+  hasGarage           Boolean?
+  garageCount         Int?
+  fireplaceCount      Int?
+  constructionType    String?
+  roofType            String?
+  foundationType      String?
+  lienCount           Int?
+  lienBalance         Float?
+  equityEstimate      Float?
+  loanToValue         Float?
+  lastTransferDate    String?
+  lastTransferPrice   Float?
+  latitude            Float?
+  longitude           Float?
+  realieRawData       Json?
+
+  status              String    @default("NEW")
+  source              String    @default("shovels")
+  dataSources         String[]  @default(["SHOVELS"])
+  tags                String[]  @default([])
+  enrichmentData      Json?
+
+  createdAt           DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  connections         Connection[]
+
+  @@index([email])
+  @@index([city, state])
+  @@index([geoId])
+  @@index([status])
+  @@index([realieEnriched])
+  @@index([createdAt])
+}
+
+model Connection {
+  id                  String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId           String
+  homeownerId         String
+  permitId            String
+  permitType          String?
+  permitDate          String?
+  permitJobValue      Float?
+  permitDescription   String?
+  source              String    @default("shovels")
+  createdAt           DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  contact             Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  homeowner           Homeowner @relation(fields: [homeownerId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, homeownerId, permitId])
+  @@index([contactId])
+  @@index([homeownerId])
+  @@index([permitId])
+  @@index([createdAt])
 }
 
 model MessageTemplate {
@@ -583,6 +742,7 @@ model DailyMetrics {
   enrollJobRan       Boolean  @default(false)
   apolloJobRan       Boolean  @default(false)
   shovelsJobRan      Boolean  @default(false)
+  homeownerJobRan    Boolean  @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @default(now()) @updatedAt
 
@@ -621,11 +781,13 @@ model PermitSearch {
   totalIncomplete      Int                 @default(0)
   googleSheetUrl       String?
   googleSheetId        String?
+  conversationId       String?
   createdAt            DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt            DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
 
   @@index([status])
   @@index([createdAt])
+  @@index([conversationId])
 }
 
 enum PermitSearchStatus {
@@ -756,4 +918,89 @@ enum ImportJobType {
 enum TemplateChannel {
   SMS
   EMAIL
+}
+
+model Conversation {
+  id        String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  title     String?
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  messages  Message[]
+}
+
+model Message {
+  id             String       @id @default(dbgenerated("(gen_random_uuid())::text"))
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  toolCalls      Json?
+  toolResults    Json?
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+
+  @@index([conversationId])
+  @@index([createdAt])
+}
+
+model Workflow {
+  id              String         @id @default(dbgenerated("(gen_random_uuid())::text"))
+  conversationId  String?
+  name            String
+  description     String?
+  status          WorkflowStatus @default(PENDING)
+  plan            Json
+  result          Json?
+  error           String?
+  totalSteps      Int            @default(0)
+  completedSteps  Int            @default(0)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
+  startedAt       DateTime?      @db.Timestamptz(6)
+  completedAt     DateTime?      @db.Timestamptz(6)
+  steps           WorkflowStep[]
+
+  @@index([conversationId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model WorkflowStep {
+  id            String             @id @default(dbgenerated("(gen_random_uuid())::text"))
+  workflowId    String
+  workflow      Workflow            @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  order         Int
+  name          String
+  action        String
+  params        Json
+  onFailure     String             @default("skip")
+  condition     Json?
+  status        WorkflowStepStatus @default(PENDING)
+  input         Json?
+  output        Json?
+  error         String?
+  progress      Int?               @default(0)
+  progressTotal Int?
+  startedAt     DateTime?          @db.Timestamptz(6)
+  completedAt   DateTime?          @db.Timestamptz(6)
+
+  @@unique([workflowId, order])
+  @@index([workflowId])
+  @@index([status])
+}
+
+enum WorkflowStatus {
+  PENDING
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum WorkflowStepStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
 }

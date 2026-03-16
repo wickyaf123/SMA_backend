@@ -199,6 +199,19 @@ export class ShovelsClient {
     return { cityGeoIdCount: cityCount, zipTotalCount: zipTotal, zipBreakdown, coveragePercent };
   }
 
+  async getPermitById(permitId: string): Promise<ShovelsPermit | null> {
+    try {
+      const response = await this.client.get<ShovelsPermit>(
+        `/permits/${permitId}`
+      );
+      return response.data || null;
+    } catch (err: any) {
+      if (err.response?.status === 404) return null;
+      logger.warn({ permitId, error: err.message }, 'Failed to fetch permit by ID');
+      return null;
+    }
+  }
+
   async checkHealth(): Promise<boolean> {
     try {
       await this.client.get('/meta/release');

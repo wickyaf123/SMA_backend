@@ -14,6 +14,9 @@ import contractorRoutes from './contractor.routes';
 import scraperRoutes from './scraper.routes';
 import queueRoutes from './queue.routes';
 import permitRoutes from './permit.routes';
+import homeownerRoutes from './homeowner.routes';
+import connectionRoutes from './connection.routes';
+import chatRoutes from './chat.routes';
 import { authenticateApiKey } from '../middleware/auth';
 
 const router = Router();
@@ -66,6 +69,15 @@ router.use('/api/v1/queues', authenticateApiKey, queueRoutes);
 
 // Permit Intelligence (protected)
 router.use('/api/v1/permits', authenticateApiKey, permitRoutes);
+
+// Homeowner Data (protected)
+router.use('/api/v1/homeowners', authenticateApiKey, homeownerRoutes);
+
+// Contractor-Homeowner Connections (protected)
+router.use('/api/v1/connections', authenticateApiKey, connectionRoutes);
+
+// Chat / Jerry AI (protected)
+router.use('/api/v1/chat', authenticateApiKey, chatRoutes);
 
 // Additional routes will be added in future phases:
 // router.use('/dashboard', dashboardRoutes);     // Phase 6

@@ -1,4 +1,21 @@
-import type { ShovelsContractor, ShovelsEmployee, ShovelsPermit } from './types';
+import type { ShovelsContractor, ShovelsEmployee, ShovelsPermit, ShovelsResident } from './types';
+
+function computeDateFriendly(dateStr: string | null): string | null {
+  if (!dateStr) return null;
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch { return dateStr; }
+}
+
+function computeMonthsAgo(dateStr: string | null): number | null {
+  if (!dateStr) return null;
+  try {
+    const d = new Date(dateStr);
+    const now = new Date();
+    return Math.max(0, (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth()));
+  } catch { return null; }
+}
 
 export interface NormalizedShovelsContact {
   email: string | null;
@@ -20,6 +37,28 @@ export interface NormalizedShovelsContact {
   companyCity: string | null;
   companyState: string | null;
   companyRevenue: string | null;
+  // Promoted permit fields
+  permitDate: string | null;
+  permitDateFriendly: string | null;
+  permitMonthsAgo: number | null;
+  permitDescription: string | null;
+  permitStatus: string | null;
+  permitNumber: string | null;
+  permitJobValue: number | null;
+  permitFees: number | null;
+  permitJurisdiction: string | null;
+  // Promoted contractor fields
+  avgJobValue: number | null;
+  totalJobValue: number | null;
+  permitCount: number | null;
+  revenue: string | null;
+  employeeCount: string | null;
+  website: string | null;
+  rating: number | null;
+  reviewCount: number | null;
+  seniorityLevel: string | null;
+  department: string | null;
+  tagTally: Record<string, number> | null;
 }
 
 function extractPrimaryEmail(contractor: ShovelsContractor): string | null {
@@ -99,6 +138,8 @@ export function normalizeContractor(
   const tags = extractTags(contractor);
   const primaryPermitType = derivePrimaryPermitType(contractor.tag_tally);
 
+  const rawPermitDate = mostRecentPermit?.start_date || mostRecentPermit?.file_date || mostRecentPermit?.first_seen_date || null;
+
   return {
     email: extractPrimaryEmail(contractor),
     firstName,
@@ -114,29 +155,38 @@ export function normalizeContractor(
     permitType: searchParams.permitType || tags[0] || null,
     permitCity: searchParams.city || contractor.address?.city || null,
     licenseNumber: contractor.license || null,
+    // Promoted permit fields
+    permitDate: rawPermitDate,
+    permitDateFriendly: computeDateFriendly(rawPermitDate),
+    permitMonthsAgo: computeMonthsAgo(rawPermitDate),
+    permitDescription: mostRecentPermit?.description || null,
+    permitStatus: mostRecentPermit?.status || null,
+    permitNumber: mostRecentPermit?.number || null,
+    permitJobValue: mostRecentPermit?.job_value ?? null,
+    permitFees: mostRecentPermit?.fees ?? null,
+    permitJurisdiction: mostRecentPermit?.jurisdiction || null,
+    // Promoted contractor fields
+    avgJobValue: contractor.avg_job_value ?? null,
+    totalJobValue: contractor.total_job_value ?? null,
+    permitCount: contractor.permit_count ?? null,
+    revenue: contractor.revenue || null,
+    employeeCount: contractor.employee_count || null,
+    website: contractor.website || null,
+    rating: contractor.rating ?? null,
+    reviewCount: contractor.review_count ?? null,
+    seniorityLevel: null,
+    department: null,
+    tagTally: contractor.tag_tally || null,
     enrichmentData: {
-      permitCount: contractor.permit_count,
-      avgJobValue: contractor.avg_job_value,
-      totalJobValue: contractor.total_job_value,
       avgConstructionDuration: contractor.avg_construction_duration,
       avgInspectionPassRate: contractor.avg_inspection_pass_rate,
       licenseNumber: contractor.license,
       tags,
-      tagTally: contractor.tag_tally,
       primaryPermitType,
       shovelsContractorId: contractor.id,
-      permitType: searchParams.permitType || tags[0] || null,
-      permitCity: searchParams.city || null,
-      permitDate: mostRecentPermit?.start_date || mostRecentPermit?.file_date || mostRecentPermit?.first_seen_date || null,
-      permitDescription: mostRecentPermit?.description || null,
-      revenue: contractor.revenue,
-      employeeCount: contractor.employee_count,
       allEmails: contractor.email,
       allPhones: contractor.phone,
-      website: contractor.website,
       linkedinUrl: contractor.linkedin_url,
-      rating: contractor.rating,
-      reviewCount: contractor.review_count,
     },
     companyName,
     companyCity: contractor.address?.city || null,
@@ -172,6 +222,73 @@ function parseEmployeeName(employee: ShovelsEmployee): { firstName: string | nul
   return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
 }
 
+export interface NormalizedHomeowner {
+  shovelsResidentId: string;
+  firstName: string | null;
+  lastName: string | null;
+  fullName: string | null;
+  email: string | null;
+  phone: string | null;
+  street: string | null;
+  city: string | null;
+  state: string | null;
+  zipCode: string | null;
+  county: string | null;
+  gender: string | null;
+  ageRange: string | null;
+  isMarried: boolean | null;
+  hasChildren: boolean | null;
+  incomeRange: string | null;
+  netWorth: string | null;
+  education: string | null;
+  homeownerFlag: string | null;
+  propertyValue: string | null;
+  propertyType: string | null;
+  yearBuilt: string | null;
+  lotSize: string | null;
+  livingArea: string | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  permitIds: string[];
+  geoId: string;
+}
+
+export function normalizeResident(
+  resident: ShovelsResident,
+  geoId: string
+): NormalizedHomeowner {
+  return {
+    shovelsResidentId: resident.id,
+    firstName: resident.first_name || null,
+    lastName: resident.last_name || null,
+    fullName: resident.name || [resident.first_name, resident.last_name].filter(Boolean).join(' ') || null,
+    email: resident.email || null,
+    phone: resident.phone || null,
+    street: [resident.street_no, resident.street].filter(Boolean).join(' ') || null,
+    city: resident.city || null,
+    state: resident.state || null,
+    zipCode: resident.zip_code || null,
+    county: resident.county || null,
+    gender: resident.gender || null,
+    ageRange: resident.age_range || null,
+    isMarried: resident.is_married ?? null,
+    hasChildren: resident.has_children ?? null,
+    incomeRange: resident.income_range || null,
+    netWorth: resident.net_worth || null,
+    education: resident.education || null,
+    homeownerFlag: resident.homeowner || null,
+    propertyValue: resident.property_value || null,
+    propertyType: resident.property_type || null,
+    yearBuilt: resident.year_built || null,
+    lotSize: resident.lot_size || null,
+    livingArea: resident.living_area || null,
+    bedrooms: resident.bedrooms ?? null,
+    bathrooms: resident.bathrooms ?? null,
+    permitIds: resident.permit_ids || [],
+    geoId,
+  };
+}
+
 export function normalizeEmployee(
   contractor: ShovelsContractor,
   employee: ShovelsEmployee,
@@ -183,6 +300,8 @@ export function normalizeEmployee(
   const phone = resolveEmployeePhone(employee, contractor);
   const tags = extractTags(contractor);
   const primaryPermitType = derivePrimaryPermitType(contractor.tag_tally);
+
+  const rawPermitDate = mostRecentPermit?.start_date || mostRecentPermit?.file_date || mostRecentPermit?.first_seen_date || null;
 
   return {
     email,
@@ -199,24 +318,38 @@ export function normalizeEmployee(
     permitType: searchParams.permitType || tags[0] || null,
     permitCity: searchParams.city || contractor.address?.city || null,
     licenseNumber: contractor.license || null,
+    // Promoted permit fields
+    permitDate: rawPermitDate,
+    permitDateFriendly: computeDateFriendly(rawPermitDate),
+    permitMonthsAgo: computeMonthsAgo(rawPermitDate),
+    permitDescription: mostRecentPermit?.description || null,
+    permitStatus: mostRecentPermit?.status || null,
+    permitNumber: mostRecentPermit?.number || null,
+    permitJobValue: mostRecentPermit?.job_value ?? null,
+    permitFees: mostRecentPermit?.fees ?? null,
+    permitJurisdiction: mostRecentPermit?.jurisdiction || null,
+    // Promoted contractor fields
+    avgJobValue: contractor.avg_job_value ?? null,
+    totalJobValue: contractor.total_job_value ?? null,
+    permitCount: contractor.permit_count ?? null,
+    revenue: contractor.revenue || null,
+    employeeCount: contractor.employee_count || null,
+    website: contractor.website || null,
+    rating: contractor.rating ?? null,
+    reviewCount: contractor.review_count ?? null,
+    seniorityLevel: employee.seniority_level || null,
+    department: employee.department || null,
+    tagTally: contractor.tag_tally || null,
     enrichmentData: {
-      permitCount: contractor.permit_count,
+      avgConstructionDuration: contractor.avg_construction_duration,
+      avgInspectionPassRate: contractor.avg_inspection_pass_rate,
       licenseNumber: contractor.license,
-      tagTally: contractor.tag_tally,
+      tags,
       primaryPermitType,
       shovelsContractorId: contractor.id,
       shovelsEmployeeId: employee.id,
-      permitType: searchParams.permitType || tags[0] || null,
-      permitCity: searchParams.city || null,
-      permitDate: mostRecentPermit?.start_date || mostRecentPermit?.file_date || mostRecentPermit?.first_seen_date || null,
-      permitDescription: mostRecentPermit?.description || null,
-      revenue: contractor.revenue,
-      employeeCount: contractor.employee_count,
       emailSource,
       businessEmail: employee.business_email,
-      seniorityLevel: employee.seniority_level,
-      department: employee.department,
-      jobTitle: employee.job_title,
       linkedinUrl: employee.linkedin_url,
     },
     companyName: contractor.business_name || contractor.name || 'Unknown',

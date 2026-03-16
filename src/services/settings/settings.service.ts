@@ -20,6 +20,8 @@ export interface PipelineControlSettings {
   maintenanceMessage: string | null;
   schedulerEnabled: boolean;
   shovelsJobEnabled: boolean;
+  homeownerJobEnabled: boolean;
+  connectionJobEnabled: boolean;
   enrichJobEnabled: boolean;
   mergeJobEnabled: boolean;
   validateJobEnabled: boolean;
@@ -73,6 +75,15 @@ export interface ShovelsScraperSettings {
   maxResults: number;
   enableEmployees: boolean;
   employeeFilter: EmployeeFilterSettings;
+}
+
+export interface HomeownerScraperSettings {
+  geoIds: string[];
+  locations: string[];
+  maxResults: number;
+  realieEnrich: boolean;
+  useShovelsGeoIds: boolean;
+  fetchPermitDetails: boolean;
 }
 
 export class SettingsService {
@@ -326,6 +337,43 @@ export class SettingsService {
     }
   }
 
+  async getHomeownerSettings(): Promise<HomeownerScraperSettings> {
+    const settings = await this.getSettings();
+    return {
+      geoIds: settings.homeownerGeoIds || [],
+      locations: settings.homeownerLocations || [],
+      maxResults: settings.homeownerMaxResults ?? 100,
+      realieEnrich: settings.homeownerRealieEnrich ?? true,
+      useShovelsGeoIds: settings.homeownerUseShovelsGeoIds ?? true,
+      fetchPermitDetails: settings.homeownerFetchPermitDetails ?? true,
+    };
+  }
+
+  async updateHomeownerSettings(data: Partial<HomeownerScraperSettings>): Promise<HomeownerScraperSettings> {
+    try {
+      logger.info({ updates: Object.keys(data) }, 'Updating homeowner scraper settings');
+      await this.getSettings();
+      await prisma.settings.update({
+        where: { id: DEFAULT_SETTINGS_ID },
+        data: {
+          homeownerGeoIds: data.geoIds,
+          homeownerLocations: data.locations,
+          homeownerMaxResults: data.maxResults,
+          homeownerRealieEnrich: data.realieEnrich,
+          homeownerUseShovelsGeoIds: data.useShovelsGeoIds,
+          homeownerFetchPermitDetails: data.fetchPermitDetails,
+          updatedAt: new Date(),
+        },
+      });
+      logger.info('Homeowner settings updated successfully');
+      return this.getHomeownerSettings();
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      logger.error({ error, data }, 'Failed to update homeowner settings');
+      throw new AppError('Failed to update homeowner settings', 500, 'SETTINGS_UPDATE_ERROR');
+    }
+  }
+
   async getScraperSettings(): Promise<{ shovels: ShovelsScraperSettings | null }> {
     try {
       const shovels = await this.getShovelsSettings().catch(() => null);
@@ -352,6 +400,8 @@ export class SettingsService {
       maintenanceMessage: settings.maintenanceMessage,
       schedulerEnabled: settings.schedulerEnabled ?? true,
       shovelsJobEnabled: settings.shovelsJobEnabled ?? true,
+      homeownerJobEnabled: settings.homeownerJobEnabled ?? false,
+      connectionJobEnabled: settings.connectionJobEnabled ?? false,
       enrichJobEnabled: settings.enrichJobEnabled ?? true,
       mergeJobEnabled: settings.mergeJobEnabled ?? true,
       validateJobEnabled: settings.validateJobEnabled ?? true,
@@ -381,6 +431,8 @@ export class SettingsService {
           maintenanceMessage: data.maintenanceMessage,
           schedulerEnabled: data.schedulerEnabled,
           shovelsJobEnabled: data.shovelsJobEnabled,
+          homeownerJobEnabled: data.homeownerJobEnabled,
+          connectionJobEnabled: data.connectionJobEnabled,
           enrichJobEnabled: data.enrichJobEnabled,
           mergeJobEnabled: data.mergeJobEnabled,
           validateJobEnabled: data.validateJobEnabled,
@@ -514,6 +566,8 @@ export class SettingsService {
     const settings = await this.getSettings();
     return {
       shovels: settings.shovelsJobCron || '0 7 * * *',
+      homeowner: settings.homeownerJobCron || '0 9 * * *',
+      connection: settings.connectionJobCron || '30 9 * * *',
       enrich: settings.enrichJobCron || '0 8 * * *',
       merge: settings.mergeJobCron || '0 9 * * *',
       validate: settings.validateJobCron || '0 10 * * *',
@@ -538,6 +592,8 @@ export class SettingsService {
         linkedinGloballyEnabled: false,
         enrollJobEnabled: false,
         shovelsJobEnabled: false,
+        homeownerJobEnabled: false,
+        connectionJobEnabled: false,
         lastEmergencyStopAt: new Date(),
         lastEmergencyStopBy: stoppedBy,
         updatedAt: new Date(),
@@ -580,7 +636,7 @@ export class SettingsService {
   /**
    * Check if a specific job is enabled
    */
-  async isJobEnabled(jobType: 'shovels' | 'enrich' | 'merge' | 'validate' | 'enroll'): Promise<boolean> {
+  async isJobEnabled(jobType: 'shovels' | 'homeowner' | 'connection' | 'enrich' | 'merge' | 'validate' | 'enroll'): Promise<boolean> {
     const settings = await this.getSettings();
     
     if (!settings.pipelineEnabled || !settings.schedulerEnabled) {
@@ -590,6 +646,10 @@ export class SettingsService {
     switch (jobType) {
       case 'shovels':
         return settings.shovelsJobEnabled ?? true;
+      case 'homeowner':
+        return settings.homeownerJobEnabled ?? false;
+      case 'connection':
+        return settings.connectionJobEnabled ?? false;
       case 'enrich':
         return settings.enrichJobEnabled ?? true;
       case 'merge':
@@ -637,13 +697,13 @@ export class SettingsService {
   }> {
     const settings = await this.getSettings();
     return {
-      permitRouteMode: (settings as any).permitRouteMode || 'email',
-      permitEmailCampaignId: (settings as any).permitEmailCampaignId || null,
-      permitGhlWorkflowId: (settings as any).permitGhlWorkflowId || null,
-      permitGhlEmailReplyWorkflowId: (settings as any).permitGhlEmailReplyWorkflowId || null,
-      permitGhlSmsReplyWorkflowId: (settings as any).permitGhlSmsReplyWorkflowId || null,
-      permitSmsFallbackEnabled: (settings as any).permitSmsFallbackEnabled ?? true,
-      permitAutoRouteEnabled: (settings as any).permitAutoRouteEnabled ?? false,
+      permitRouteMode: settings.permitRouteMode || 'email',
+      permitEmailCampaignId: settings.permitEmailCampaignId || null,
+      permitGhlWorkflowId: settings.permitGhlWorkflowId || null,
+      permitGhlEmailReplyWorkflowId: settings.permitGhlEmailReplyWorkflowId || null,
+      permitGhlSmsReplyWorkflowId: settings.permitGhlSmsReplyWorkflowId || null,
+      permitSmsFallbackEnabled: settings.permitSmsFallbackEnabled ?? true,
+      permitAutoRouteEnabled: settings.permitAutoRouteEnabled ?? false,
     };
   }
 

@@ -27,7 +27,11 @@ import type {
   OutreachJobData,
   LinkedInJobData,
   NotificationJobData,
+  WorkflowJobData,
 } from './queues';
+
+// Import workflow engine
+import { workflowEngine } from '../services/workflow/workflow.engine';
 
 // Worker instances
 let workers: Worker[] = [];
@@ -167,6 +171,25 @@ export async function initializeWorkers(): Promise<void> {
     }
   );
 
+  // Workflow Worker
+  const workflowWorker = new Worker<WorkflowJobData>(
+    'workflow',
+    async (job: Job<WorkflowJobData>) => {
+      const { workflowId } = job.data;
+      logger.info({ jobId: job.id, workflowId }, 'Processing workflow job');
+      await workflowEngine.executeWorkflow(workflowId);
+      return { success: true, workflowId };
+    },
+    {
+      connection: redis,
+      concurrency: 3, // Allow a few workflows to run concurrently
+      limiter: {
+        max: 5,
+        duration: 1000, // 5 jobs per second max
+      },
+    }
+  );
+
   workers = [
     leadWorker,
     scraperWorker,
@@ -175,6 +198,7 @@ export async function initializeWorkers(): Promise<void> {
     validationWorker,
     outreachWorker,
     linkedinWorker,
+    workflowWorker,
   ];
 
   // Add event handlers to all workers

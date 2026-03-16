@@ -224,6 +224,37 @@ export class SettingsController {
     }
   }
 
+  // ==================== HOMEOWNER SCRAPER ====================
+
+  async getHomeownerSettings(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const settings = await settingsService.getHomeownerSettings();
+      sendSuccess(res, settings);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateHomeownerSettings(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const settings = await settingsService.updateHomeownerSettings(req.body);
+      sendSuccess(res, {
+        ...settings,
+        message: 'Homeowner scraper settings updated successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   // ==================== PIPELINE CONTROL ====================
 
   /**
@@ -443,7 +474,7 @@ export class SettingsController {
   ): Promise<void> {
     try {
       const { jobName } = req.params;
-      const validJobs = ['shovels', 'enrich', 'merge', 'validate', 'enroll'];
+      const validJobs = ['shovels', 'homeowner', 'enrich', 'merge', 'validate', 'enroll'];
       
       if (!validJobs.includes(jobName)) {
         sendSuccess(res, { error: `Invalid job name. Valid jobs: ${validJobs.join(', ')}` }, 400);

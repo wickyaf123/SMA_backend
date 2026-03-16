@@ -7,6 +7,7 @@ import { Server as HttpServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { logger } from '../utils/logger';
 import { config } from './index';
+import { prisma } from './database';
 
 let io: SocketIOServer | null = null;
 
@@ -45,6 +46,24 @@ export enum WSEventType {
 
   // System events
   SYSTEM_ALERT = 'system:alert',
+
+  // Chat events
+  CHAT_TOKEN = 'chat:token',
+  CHAT_TOOL_USE = 'chat:tool_use',
+  CHAT_TOOL_RESULT = 'chat:tool_result',
+  CHAT_DONE = 'chat:done',
+  CHAT_ERROR = 'chat:error',
+
+  // Workflow events
+  WORKFLOW_STARTED = 'workflow:started',
+  WORKFLOW_STEP_STARTED = 'workflow:step_started',
+  WORKFLOW_STEP_PROGRESS = 'workflow:step_progress',
+  WORKFLOW_STEP_COMPLETED = 'workflow:step_completed',
+  WORKFLOW_STEP_FAILED = 'workflow:step_failed',
+  WORKFLOW_STEP_SKIPPED = 'workflow:step_skipped',
+  WORKFLOW_COMPLETED = 'workflow:completed',
+  WORKFLOW_FAILED = 'workflow:failed',
+  WORKFLOW_CANCELLED = 'workflow:cancelled',
 }
 
 /**
@@ -87,6 +106,70 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
     socket.on('unsubscribe', (room: string) => {
       socket.leave(room);
       logger.debug({ socketId: socket.id, room }, 'Client unsubscribed from room');
+    });
+
+    // Handle chat room subscription
+    socket.on('chat:join', async (conversationId: string) => {
+      const room = `chat:${conversationId}`;
+      socket.join(room);
+      logger.debug({ socketId: socket.id, room }, 'Client joined chat room');
+
+      // Send active/recent job states so cards persist across page reloads
+      try {
+        const activeSearches = await prisma.permitSearch.findMany({
+          where: {
+            conversationId,
+            OR: [
+              { status: { in: ['PENDING', 'SEARCHING', 'ENRICHING'] } },
+              {
+                status: { in: ['READY_FOR_REVIEW', 'SHEET_WRITTEN', 'COMPLETED'] },
+                updatedAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
+              },
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        for (const search of activeSearches) {
+          const isInProgress = ['PENDING', 'SEARCHING', 'ENRICHING'].includes(search.status);
+          const isFailed = search.status === 'FAILED';
+          const event = isInProgress
+            ? WSEventType.JOB_STARTED
+            : isFailed
+              ? WSEventType.JOB_FAILED
+              : WSEventType.JOB_COMPLETED;
+
+          socket.emit(event, {
+            jobId: search.id,
+            jobType: 'permit:search',
+            status: isInProgress ? 'started' : isFailed ? 'failed' : 'completed',
+            result: {
+              total: search.totalFound,
+              enriched: search.totalEnriched,
+              incomplete: search.totalIncomplete,
+              sheetUrl: search.googleSheetUrl,
+              permitType: search.permitType,
+              city: search.city,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        if (activeSearches.length > 0) {
+          logger.debug(
+            { socketId: socket.id, conversationId, count: activeSearches.length },
+            'Sent active job states on chat:join'
+          );
+        }
+      } catch (err) {
+        logger.error({ err, conversationId }, 'Failed to query active searches on chat:join');
+      }
+    });
+
+    socket.on('chat:leave', (conversationId: string) => {
+      const room = `chat:${conversationId}`;
+      socket.leave(room);
+      logger.debug({ socketId: socket.id, room }, 'Client left chat room');
     });
 
     // Handle ping for connection health
@@ -159,5 +242,151 @@ export async function closeWebSocket(): Promise<void> {
   }
 }
 
+// ==================== JOB EVENT HELPERS ====================
 
+/**
+ * Emit a job event to a specific conversation's chat room
+ */
+export function emitJobToConversation(
+  conversationId: string,
+  event: WSEventType,
+  data: {
+    jobId: string;
+    jobType: string;
+    status: string;
+    result?: any;
+    error?: string;
+  }
+): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, event, data);
+  }
+}
+
+// ==================== WORKFLOW EVENT HELPERS ====================
+
+/**
+ * Emit workflow started event to the conversation room
+ */
+export function emitWorkflowStarted(conversationId: string, data: {
+  workflowId: string;
+  name: string;
+  totalSteps: number;
+}): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STARTED, data);
+  }
+  broadcast(WSEventType.WORKFLOW_STARTED, data);
+}
+
+/**
+ * Emit workflow step started event
+ */
+export function emitWorkflowStepStarted(conversationId: string, data: {
+  workflowId: string;
+  stepOrder: number;
+  stepName: string;
+  action: string;
+}): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_STARTED, data);
+  }
+  broadcast(WSEventType.WORKFLOW_STEP_STARTED, data);
+}
+
+/**
+ * Emit workflow step progress event
+ */
+export function emitWorkflowStepProgress(conversationId: string, data: {
+  workflowId: string;
+  stepOrder: number;
+  progress: number;
+  progressTotal?: number;
+}): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_PROGRESS, data);
+  }
+  broadcast(WSEventType.WORKFLOW_STEP_PROGRESS, data);
+}
+
+/**
+ * Emit workflow step completed event
+ */
+export function emitWorkflowStepCompleted(conversationId: string, data: {
+  workflowId: string;
+  stepOrder: number;
+  output: any;
+}): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_COMPLETED, data);
+  }
+  broadcast(WSEventType.WORKFLOW_STEP_COMPLETED, data);
+}
+
+/**
+ * Emit workflow step failed event
+ */
+export function emitWorkflowStepFailed(conversationId: string, data: {
+  workflowId: string;
+  stepOrder: number;
+  error: string;
+  onFailure: string;
+}): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_FAILED, data);
+  }
+  broadcast(WSEventType.WORKFLOW_STEP_FAILED, data);
+}
+
+/**
+ * Emit workflow step skipped event
+ */
+export function emitWorkflowStepSkipped(conversationId: string, data: {
+  workflowId: string;
+  stepOrder: number;
+  reason: string;
+}): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_SKIPPED, data);
+  }
+  broadcast(WSEventType.WORKFLOW_STEP_SKIPPED, data);
+}
+
+/**
+ * Emit workflow completed event
+ */
+export function emitWorkflowCompleted(conversationId: string, data: {
+  workflowId: string;
+  result: any;
+}): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_COMPLETED, data);
+  }
+  broadcast(WSEventType.WORKFLOW_COMPLETED, data);
+}
+
+/**
+ * Emit workflow failed event
+ */
+export function emitWorkflowFailed(conversationId: string, data: {
+  workflowId: string;
+  error: string;
+}): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_FAILED, data);
+  }
+  broadcast(WSEventType.WORKFLOW_FAILED, data);
+}
+
+/**
+ * Emit workflow cancelled event
+ */
+export function emitWorkflowCancelled(conversationId: string, data: {
+  workflowId: string;
+}): void {
+  if (conversationId) {
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_CANCELLED, data);
+  }
+  broadcast(WSEventType.WORKFLOW_CANCELLED, data);
+}
 

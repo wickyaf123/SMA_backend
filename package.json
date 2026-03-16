@@ -34,6 +34,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@prisma/client": "^5.7.0",
     "@sentry/node": "^10.32.1",
     "@types/multer": "^2.0.0",

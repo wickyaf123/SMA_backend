@@ -58,6 +58,9 @@ const envSchema = z.object({
   // Shovels (Permit Intelligence)
   SHOVELS_API_KEY: z.string().min(1, 'SHOVELS_API_KEY is required'),
 
+  // Realie (Property Data Enrichment)
+  REALIE_API_KEY: z.string().optional(),
+
   // Clay (Enrichment)
   CLAY_WEBHOOK_SECRET: z.string().optional(),
   CLAY_TABLE_URL: z.string().url().optional(),
@@ -184,6 +187,11 @@ export const config = {
   shovels: {
     apiKey: env.SHOVELS_API_KEY,
     baseUrl: 'https://api.shovels.ai/v2',
+  },
+
+  realie: {
+    apiKey: env.REALIE_API_KEY,
+    baseUrl: 'https://app.realie.ai/api',
   },
 
   clay: {

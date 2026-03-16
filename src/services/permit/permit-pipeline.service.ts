@@ -3,7 +3,9 @@ import { shovelsScraperService } from '../scraper/shovels.service';
 import { clayClient } from '../../integrations/clay/client';
 import { permitSheetsService } from './sheets.service';
 import { permitRoutingService } from './routing.service';
+import { config } from '../../config';
 import { realtimeEmitter } from '../realtime/event-emitter.service';
+import { emitJobToConversation, WSEventType } from '../../config/websocket';
 import { logger } from '../../utils/logger';
 import type { ClayEnrichPayload } from '../../integrations/clay/types';
 
@@ -13,20 +15,30 @@ export interface PermitPipelineParams {
   geoId: string;
   startDate: string;
   endDate: string;
+  conversationId?: string;
 }
 
 export class PermitPipelineService {
-  async startSearch(params: PermitPipelineParams): Promise<string> {
-    const search = await prisma.permitSearch.create({
-      data: {
-        permitType: params.permitType,
-        city: params.city,
-        geoId: params.geoId,
-        startDate: new Date(params.startDate),
-        endDate: new Date(params.endDate),
-        status: 'SEARCHING',
-      },
-    });
+  async startSearch(params: PermitPipelineParams, existingSearchId?: string): Promise<string> {
+    let search;
+    if (existingSearchId) {
+      search = await prisma.permitSearch.update({
+        where: { id: existingSearchId },
+        data: { status: 'SEARCHING' },
+      });
+    } else {
+      search = await prisma.permitSearch.create({
+        data: {
+          permitType: params.permitType,
+          city: params.city,
+          geoId: params.geoId,
+          startDate: new Date(params.startDate),
+          endDate: new Date(params.endDate),
+          status: 'SEARCHING',
+          conversationId: params.conversationId || null,
+        },
+      });
+    }
 
     const dateRangeDays = Math.ceil(
       (new Date(params.endDate).getTime() - new Date(params.startDate).getTime()) / 86400000
@@ -37,6 +49,15 @@ export class PermitPipelineService {
       jobType: 'permit:search',
       status: 'started',
     });
+
+    if (search.conversationId) {
+      emitJobToConversation(search.conversationId, WSEventType.JOB_STARTED, {
+        jobId: search.id,
+        jobType: 'permit:search',
+        status: 'started',
+        result: { permitType: params.permitType, city: params.city },
+      });
+    }
 
     const result = await shovelsScraperService.scrapeByPermitTypeAndGeo(
       params.permitType, params.geoId, params.city, dateRangeDays, 100, true
@@ -184,40 +205,74 @@ export class PermitPipelineService {
 
     const allEnriched = [...enriched, ...skipped];
 
-    try {
-      const title = `Permits - ${search.permitType} - ${search.city} - ${new Date().toLocaleDateString()}`;
-      const { sheetId, sheetUrl } = await permitSheetsService.createPermitSheet(title);
+    // Build a preview of top contacts for chat display
+    const contactPreview = raw.slice(0, 10).map(c => ({
+      name: c.fullName || [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown',
+      company: c.company?.name || '',
+      email: c.email || '',
+      phone: c.phone || '',
+      permitType: (c as any).permitType || '',
+      city: c.city || '',
+    }));
 
-      await Promise.all([
-        permitSheetsService.writeContactsToTab(sheetId, 'Raw', raw),
-        permitSheetsService.writeContactsToTab(sheetId, 'Enriched', allEnriched),
-        permitSheetsService.writeContactsToTab(sheetId, 'Incomplete', incomplete),
-      ]);
+    const sheetsConfigured = !!(config.googleSheets.serviceAccountEmail && config.googleSheets.privateKey);
+    let sheetUrl: string | undefined;
+    let sheetId: string | undefined;
 
-      await prisma.permitSearch.update({
-        where: { id: permitSearchId },
-        data: {
-          status: 'READY_FOR_REVIEW',
-          googleSheetUrl: sheetUrl,
-          googleSheetId: sheetId,
-          totalEnriched: allEnriched.length,
-          totalIncomplete: incomplete.length,
-        },
-      });
+    if (sheetsConfigured) {
+      try {
+        const title = `Permits - ${search.permitType} - ${search.city} - ${new Date().toLocaleDateString()}`;
+        const result = await permitSheetsService.createPermitSheet(title);
+        sheetId = result.sheetId;
+        sheetUrl = result.sheetUrl;
 
-      realtimeEmitter.emitJobEvent({
+        await Promise.all([
+          permitSheetsService.writeContactsToTab(sheetId, 'Raw', raw),
+          permitSheetsService.writeContactsToTab(sheetId, 'Enriched', allEnriched),
+          permitSheetsService.writeContactsToTab(sheetId, 'Incomplete', incomplete),
+        ]);
+
+        logger.info({ permitSearchId, sheetUrl }, 'Permit sheet built and ready for review');
+      } catch (err: any) {
+        logger.warn({ permitSearchId, err: err.message }, 'Failed to create Google Sheet — continuing without sheet');
+      }
+    } else {
+      logger.info({ permitSearchId }, 'Google Sheets not configured — skipping sheet creation');
+    }
+
+    await prisma.permitSearch.update({
+      where: { id: permitSearchId },
+      data: {
+        status: 'READY_FOR_REVIEW',
+        totalEnriched: allEnriched.length,
+        totalIncomplete: incomplete.length,
+        ...(sheetUrl ? { googleSheetUrl: sheetUrl, googleSheetId: sheetId } : {}),
+      },
+    });
+
+    const completedResult = {
+      sheetUrl,
+      total: raw.length,
+      enriched: allEnriched.length,
+      incomplete: incomplete.length,
+      permitType: search.permitType,
+      city: search.city,
+      contacts: contactPreview,
+    };
+
+    realtimeEmitter.emitJobEvent({
+      jobId: permitSearchId,
+      jobType: 'permit:sheet_ready',
+      status: 'completed',
+      result: completedResult,
+    });
+
+    if (search.conversationId) {
+      emitJobToConversation(search.conversationId, WSEventType.JOB_COMPLETED, {
         jobId: permitSearchId,
-        jobType: 'permit:sheet_ready',
+        jobType: 'permit:search',
         status: 'completed',
-        result: { sheetUrl, total: raw.length, enriched: allEnriched.length, incomplete: incomplete.length },
-      });
-
-      logger.info({ permitSearchId, sheetUrl }, 'Permit sheet built and ready for review');
-    } catch (err: any) {
-      logger.error({ permitSearchId, err: err.message }, 'Failed to create Google Sheet');
-      await prisma.permitSearch.update({
-        where: { id: permitSearchId },
-        data: { status: 'READY_FOR_REVIEW', totalEnriched: allEnriched.length, totalIncomplete: incomplete.length },
+        result: completedResult,
       });
     }
   }

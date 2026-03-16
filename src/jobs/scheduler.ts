@@ -10,6 +10,8 @@ import { mergeJob } from './merge.job';
 import { validateJob } from './validate.job';
 import { autoEnrollJob } from './auto-enroll.job';
 import { shovelsScraperJob } from './shovels-scrape.job';
+import { homeownerScraperJob } from './homeowner-scrape.job';
+import { connectionJob } from './connection.job';
 import { jobLogService } from '../services/job-log.service';
 import { settingsService } from '../services/settings/settings.service';
 import { errorNotifier } from './error-notifier';
@@ -49,6 +51,25 @@ export class JobScheduler {
           return { success: true, skipped: true };
         }
         return await shovelsScraperJob.run({ useSettings: true });
+      });
+
+      await this.scheduleJob('homeowner', schedules.homeowner || '0 9 * * *', 'HOMEOWNER_SCRAPE', async () => {
+        const enabled = await settingsService.isJobEnabled('homeowner');
+        if (!enabled) {
+          logger.info('Homeowner job skipped - disabled in settings');
+          return { success: true, skipped: true };
+        }
+        return await homeownerScraperJob.run({ useSettings: true });
+      });
+
+      await this.scheduleJob('connection', schedules.connection || '30 9 * * *', 'CONNECTION_RESOLVE', async () => {
+        const enabled = await settingsService.isJobEnabled('connection');
+        if (!enabled) {
+          logger.info('Connection job skipped - disabled in settings');
+          return { success: true, skipped: true };
+        }
+        const settings = await settingsService.getSettings();
+        return await connectionJob.run({ batchSize: settings.connectionBatchSize ?? 50 });
       });
 
       await this.scheduleJob('enrich', schedules.enrich, 'ENRICH', async () => {
@@ -272,7 +293,7 @@ export class JobScheduler {
    * Can optionally use queue for async processing
    */
   async triggerJob(
-    jobName: 'shovels' | 'enrich' | 'merge' | 'validate' | 'enroll',
+    jobName: 'shovels' | 'homeowner' | 'connection' | 'enrich' | 'merge' | 'validate' | 'enroll',
     options?: { useQueue?: boolean }
   ): Promise<any> {
     logger.info({ jobName, useQueue: options?.useQueue }, 'Manually triggering job');
@@ -286,6 +307,12 @@ export class JobScheduler {
     switch (jobName) {
       case 'shovels':
         return await shovelsScraperJob.run({ useSettings: true });
+      case 'homeowner':
+        return await homeownerScraperJob.run({ useSettings: true });
+      case 'connection': {
+        const settings = await settingsService.getSettings();
+        return await connectionJob.run({ batchSize: settings.connectionBatchSize ?? 50 });
+      }
       case 'enrich':
         return await enrichJob.run({ batchSize: 50, onlyNew: true });
       case 'merge':
@@ -304,7 +331,7 @@ export class JobScheduler {
    * Returns immediately with job ID
    */
   async addJobToQueue(
-    jobName: 'shovels' | 'enrich' | 'merge' | 'validate' | 'enroll'
+    jobName: 'shovels' | 'homeowner' | 'connection' | 'enrich' | 'merge' | 'validate' | 'enroll'
   ): Promise<{ queued: true; jobId: string }> {
     let job;
 
@@ -314,6 +341,20 @@ export class JobScheduler {
           type: 'shovels',
           config: { useSettings: true },
         });
+        break;
+
+      case 'homeowner':
+        job = await scraperQueue.add('homeowner', {
+          type: 'homeowner',
+          config: { useSettings: true },
+        });
+        break;
+
+      case 'connection':
+        job = await leadProcessingQueue.add('connection', {
+          type: 'full-pipeline',
+          batchSize: 50,
+        } as any);
         break;
 
       case 'enrich':
