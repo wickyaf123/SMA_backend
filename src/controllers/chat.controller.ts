@@ -3,6 +3,7 @@ import { chatService } from '../services/chat/chat.service';
 import { getIO } from '../config/websocket';
 import { logger } from '../utils/logger';
 import { sendSuccess } from '../utils/response';
+import { prisma } from '../config/database';
 
 export class ChatController {
   async createConversation(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -93,6 +94,93 @@ export class ChatController {
       sendSuccess(res, message);
     } catch (error) {
       logger.error({ error, conversationId: req.params.id }, 'Error sending chat message');
+      next(error);
+    }
+  }
+
+  async searchConversations(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { q } = req.query;
+      if (!q || typeof q !== 'string') {
+        sendSuccess(res, []);
+        return;
+      }
+      const results = await chatService.searchConversations(q);
+      sendSuccess(res, results);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async submitFeedback(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id: messageId } = req.params;
+      const { rating, comment } = req.body;
+
+      if (!rating || !['up', 'down'].includes(rating)) {
+        res.status(400).json({ success: false, error: 'Rating must be "up" or "down"' });
+        return;
+      }
+
+      const feedback = await prisma.messageFeedback.upsert({
+        where: { messageId },
+        create: { messageId, rating, comment: comment || null },
+        update: { rating, comment: comment || null },
+      });
+
+      sendSuccess(res, feedback);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getFeedbackSummary(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const [upCount, downCount, total] = await Promise.all([
+        prisma.messageFeedback.count({ where: { rating: 'up' } }),
+        prisma.messageFeedback.count({ where: { rating: 'down' } }),
+        prisma.messageFeedback.count(),
+      ]);
+      sendSuccess(res, { total, up: upCount, down: downCount });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async uploadFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id: conversationId } = req.params;
+
+      if (!req.file) {
+        res.status(400).json({ success: false, error: 'No file uploaded' });
+        return;
+      }
+
+      const csvContent = req.file.buffer.toString('utf-8');
+      const lines = csvContent.split('\n').filter(l => l.trim());
+
+      if (lines.length < 2) {
+        res.status(400).json({ success: false, error: 'CSV file is empty or has no data rows' });
+        return;
+      }
+
+      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+      const sampleRows = lines.slice(1, 4).map(line =>
+        line.split(',').map(c => c.trim().replace(/^"|"$/g, ''))
+      );
+
+      // Store parsed data in Redis with 30-min TTL
+      const { redis } = await import('../config/redis');
+      const dataKey = `csv-upload:${conversationId}`;
+      await redis.set(dataKey, csvContent, 'EX', 1800); // 30 min TTL
+
+      sendSuccess(res, {
+        rowCount: lines.length - 1,
+        columns: headers,
+        sampleRows: sampleRows.slice(0, 3),
+        storedKey: dataKey,
+      });
+    } catch (error) {
       next(error);
     }
   }

@@ -119,6 +119,7 @@ model Contact {
   replies               Reply[]
   sequenceEnrollments   SequenceEnrollment[]
   connections           Connection[]
+  labels                ContactLabel[]
 
   @@index([email])
   @@index([status])
@@ -537,6 +538,10 @@ model Settings {
   permitGhlSmsReplyWorkflowId    String?
   permitSmsFallbackEnabled       Boolean   @default(true)
   permitAutoRouteEnabled         Boolean   @default(false)
+
+  // GHL Pipeline Settings
+  ghlPipelineId      String?
+  ghlDefaultStageId  String?
 }
 
 model Homeowner {
@@ -656,6 +661,18 @@ model Connection {
   @@index([homeownerId])
   @@index([permitId])
   @@index([createdAt])
+}
+
+model ContactLabel {
+  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId String
+  name      String   // e.g. "Hot", "Warm", "Cold", "Customer", "DNC"
+  color     String?  // hex or tailwind color name
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([contactId, name])
+  @@index([contactId])
 }
 
 model MessageTemplate {
@@ -821,6 +838,7 @@ enum ContactStatus {
   UNSUBSCRIBED
   COMPLETED
   PAUSED
+  CUSTOMER
 }
 
 enum EmailValidationStatus {
@@ -921,25 +939,38 @@ enum TemplateChannel {
 }
 
 model Conversation {
-  id        String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  title     String?
-  createdAt DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
-  messages  Message[]
+  id                     String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  title                  String?
+  createdAt              DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  summary                String?
+  lastSummarizedAtCount  Int       @default(0)
+  messages               Message[]
 }
 
 model Message {
-  id             String       @id @default(dbgenerated("(gen_random_uuid())::text"))
+  id             String           @id @default(dbgenerated("(gen_random_uuid())::text"))
   conversationId String
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   role           String
   content        String
   toolCalls      Json?
   toolResults    Json?
-  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+  metadata       Json?
+  createdAt      DateTime         @default(now()) @db.Timestamptz(6)
+  feedback       MessageFeedback?
 
   @@index([conversationId])
   @@index([createdAt])
+}
+
+model MessageFeedback {
+  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  messageId String   @unique
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  rating    String   // 'up' | 'down'
+  comment   String?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
 }
 
 model Workflow {
@@ -980,6 +1011,8 @@ model WorkflowStep {
   error         String?
   progress      Int?               @default(0)
   progressTotal Int?
+  retryCount    Int                @default(0)
+  maxRetries    Int                @default(3)
   startedAt     DateTime?          @db.Timestamptz(6)
   completedAt   DateTime?          @db.Timestamptz(6)
 

@@ -45,3 +45,22 @@ export const authRateLimiter = rateLimit({
   },
 });
 
+/**
+ * Chat message rate limiter
+ * Prevents spam messages and excessive Anthropic API usage
+ */
+export const chatRateLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 10, // 10 messages per minute per IP
+  message: 'Too many messages, please slow down',
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    // Key by IP + conversation ID for more granular limiting
+    return `${req.ip}-${req.params?.id || 'unknown'}`;
+  },
+  handler: (req, res) => {
+    throw new RateLimitError('Chat rate limit exceeded. Please wait before sending more messages.', 60);
+  },
+});
+

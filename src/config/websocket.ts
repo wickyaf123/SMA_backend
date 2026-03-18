@@ -172,6 +172,20 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
       logger.debug({ socketId: socket.id, room }, 'Client left chat room');
     });
 
+    // Handle stream cancellation
+    socket.on('chat:cancel', async (conversationId: string) => {
+      logger.info({ socketId: socket.id, conversationId }, 'Client requested stream cancellation');
+      try {
+        const { chatService } = await import('../services/chat/chat.service');
+        await chatService.cancelStream(conversationId);
+        // Emit done event so frontend knows to stop showing streaming state
+        const room = `chat:${conversationId}`;
+        io?.to(room).emit('chat:done', { conversationId, cancelled: true });
+      } catch (err) {
+        logger.error({ err, conversationId }, 'Failed to cancel stream');
+      }
+    });
+
     // Handle ping for connection health
     socket.on('ping', () => {
       socket.emit('pong', { timestamp: Date.now() });

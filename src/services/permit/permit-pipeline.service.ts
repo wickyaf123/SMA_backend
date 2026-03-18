@@ -63,6 +63,33 @@ export class PermitPipelineService {
       params.permitType, params.geoId, params.city, dateRangeDays, 100, true
     );
 
+    // If the scraper returned errors and no results, mark as failed
+    if (result.totalScraped === 0 && result.errors.length > 0) {
+      const errorMsg = result.errors.join('; ');
+      await prisma.permitSearch.update({
+        where: { id: search.id },
+        data: { status: 'FAILED', totalFound: 0 },
+      });
+
+      realtimeEmitter.emitJobEvent({
+        jobId: search.id,
+        jobType: 'permit:search',
+        status: 'failed',
+        result: { error: errorMsg },
+      });
+
+      if (search.conversationId) {
+        emitJobToConversation(search.conversationId, WSEventType.JOB_FAILED, {
+          jobId: search.id,
+          jobType: 'permit:search',
+          status: 'failed',
+          error: errorMsg,
+        });
+      }
+
+      return search.id;
+    }
+
     await prisma.permitSearch.update({
       where: { id: search.id },
       data: { status: 'ENRICHING', totalFound: result.totalImported },

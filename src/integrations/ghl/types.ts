@@ -217,6 +217,35 @@ export interface GHLInboundMessageCreateRequest {
   direction?: 'inbound';
 }
 
+// ==================== Opportunity Types ====================
+
+export interface CreateOpportunityPayload {
+  pipelineId: string;
+  stageId: string;
+  contactId: string;     // GHL contact ID
+  name: string;          // Opportunity name (e.g. "Solar Install - John Smith")
+  monetaryValue?: number;
+  status?: 'open' | 'won' | 'lost' | 'abandoned';
+  assignedTo?: string;
+}
+
+export interface GHLOpportunity {
+  id: string;
+  name: string;
+  monetaryValue: number;
+  pipelineId: string;
+  pipelineStageId: string;
+  contactId: string;
+  status: string;
+  assignedTo?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GHLOpportunityResponse {
+  opportunity: GHLOpportunity;
+}
+
 // ==================== Utility Types ====================
 
 export type GHLMessageType = 'SMS' | 'Email';

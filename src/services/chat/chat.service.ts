@@ -2,14 +2,17 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '../../config/database';
 import { config } from '../../config/index';
 import { logger } from '../../utils/logger';
+import { retryWithBackoff } from '../../utils/retry';
 import { toolDefinitions, executeTool } from './tools';
 import { JERRY_SYSTEM_PROMPT } from './system-prompt';
 
 const MAX_HISTORY_MESSAGES = 50;
 const MODEL = 'claude-sonnet-4-20250514';
+const MAX_TOOL_ITERATIONS = 10;
 
 export class ChatService {
   private client: Anthropic | null = null;
+  private activeStreams: Map<string, AbortController> = new Map();
 
   private getClient(): Anthropic {
     if (!this.client) {
@@ -62,6 +65,62 @@ export class ChatService {
     logger.info({ conversationId: id }, 'Deleted conversation');
   }
 
+  async searchConversations(query: string): Promise<any[]> {
+    if (!query || query.trim().length === 0) return [];
+
+    const results = await prisma.message.findMany({
+      where: {
+        content: {
+          contains: query,
+          mode: 'insensitive',
+        },
+        role: { in: ['user', 'assistant'] },
+      },
+      select: {
+        id: true,
+        content: true,
+        role: true,
+        conversationId: true,
+        createdAt: true,
+        conversation: {
+          select: {
+            id: true,
+            title: true,
+            updatedAt: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+
+    // Group by conversation, keep first matching message as snippet
+    const conversationMap = new Map<string, any>();
+    for (const msg of results) {
+      if (!conversationMap.has(msg.conversationId)) {
+        // Create snippet: show ~100 chars around the match
+        const idx = msg.content.toLowerCase().indexOf(query.toLowerCase());
+        const start = Math.max(0, idx - 50);
+        const end = Math.min(msg.content.length, idx + query.length + 50);
+        const snippet = (start > 0 ? '...' : '') + msg.content.slice(start, end) + (end < msg.content.length ? '...' : '');
+
+        conversationMap.set(msg.conversationId, {
+          id: msg.conversation.id,
+          title: msg.conversation.title,
+          updatedAt: msg.conversation.updatedAt,
+          matchingMessage: {
+            id: msg.id,
+            content: snippet,
+            role: msg.role,
+            createdAt: msg.createdAt,
+          },
+        });
+      }
+    }
+
+    return Array.from(conversationMap.values());
+  }
+
   async sendMessage(
     conversationId: string,
     userMessage: string,
@@ -71,13 +130,28 @@ export class ChatService {
     onDone?: (fullResponse: string) => void,
     onError?: (error: string) => void,
   ): Promise<any> {
+    let fullResponse = '';
+    let streamedText = '';
+
     try {
-      // 1. Save user message to DB
+      // 1. Save user message to DB (TASK 4: detect protocol messages)
+      let messageMetadata: any = { type: 'user' };
+      if (userMessage.startsWith('BUTTON:')) {
+        messageMetadata = { type: 'protocol_button', raw: userMessage };
+      } else if (userMessage.startsWith('CONFIRM:')) {
+        messageMetadata = { type: 'protocol_confirm', raw: userMessage };
+      } else if (userMessage.startsWith('FORM:')) {
+        messageMetadata = { type: 'protocol_form', raw: userMessage };
+      } else if (userMessage.startsWith('SYSTEM_EVENT:')) {
+        messageMetadata = { type: 'protocol_system_event', raw: userMessage };
+      }
+
       await prisma.message.create({
         data: {
           conversationId,
           role: 'user',
           content: userMessage,
+          metadata: messageMetadata,
         },
       });
 
@@ -89,11 +163,91 @@ export class ChatService {
       });
       const history = historyDesc.reverse();
 
+      // TASK 6: Check if we need to summarize old messages
+      const totalMessageCount = await prisma.message.count({ where: { conversationId } });
+      const conversation = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { summary: true, lastSummarizedAtCount: true },
+      });
+
+      let conversationSummary = conversation?.summary || null;
+
+      if (totalMessageCount > 40 && (!conversation?.lastSummarizedAtCount || totalMessageCount - conversation.lastSummarizedAtCount >= 20)) {
+        // Summarize the oldest messages that are being dropped
+        try {
+          const oldestMessages = historyDesc.slice(Math.max(0, historyDesc.length - 20)); // oldest 20 from current window
+          const messagesForSummary = oldestMessages
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .map(m => `${m.role}: ${m.content?.substring(0, 200)}`)
+            .join('\n');
+
+          if (messagesForSummary.length > 0) {
+            const summaryResponse = await this.getClient().messages.create({
+              model: 'claude-haiku-4-5-20241022',
+              max_tokens: 300,
+              messages: [{
+                role: 'user',
+                content: `Summarize this conversation context in ~100 words. Focus on key topics, decisions, and any pending actions:\n\n${messagesForSummary}`,
+              }],
+            });
+            conversationSummary = (summaryResponse.content[0] as any)?.text?.trim() || null;
+
+            if (conversationSummary) {
+              await prisma.conversation.update({
+                where: { id: conversationId },
+                data: {
+                  summary: conversationSummary,
+                  lastSummarizedAtCount: totalMessageCount,
+                },
+              });
+            }
+          }
+        } catch (summaryError) {
+          logger.warn({ error: summaryError, conversationId }, 'Failed to generate conversation summary');
+        }
+      }
+
       // 3. Build Claude messages from history
       const claudeMessages: Anthropic.MessageParam[] = [];
+
+      // TASK 6: Inject conversation summary if available
+      if (conversationSummary) {
+        claudeMessages.push({
+          role: 'user',
+          content: `[Previous conversation context: ${conversationSummary}]`,
+        });
+        claudeMessages.push({
+          role: 'assistant',
+          content: 'I understand the previous context. How can I help you continue?',
+        });
+      }
+
+      // TASK 4: Condense protocol messages when building Claude context
       for (const msg of history) {
         if (msg.role === 'user') {
-          claudeMessages.push({ role: 'user', content: msg.content });
+          // Condense protocol messages for Claude context
+          let content = msg.content;
+          const meta = msg.metadata as any;
+          if (meta?.type === 'protocol_button') {
+            const parts = msg.content.split(':');
+            content = `User selected: ${parts.slice(2).join(':')} for ${parts[1] || 'option'}`;
+          } else if (meta?.type === 'protocol_confirm') {
+            const parts = msg.content.split(':');
+            content = `User confirmed: ${parts[2] || 'action'} for ${parts[1] || 'item'}`;
+          } else if (meta?.type === 'protocol_form') {
+            const parts = msg.content.split(':');
+            const formId = parts[1] || 'form';
+            try {
+              const formData = JSON.parse(parts.slice(2).join(':'));
+              content = `User submitted form "${formId}": ${JSON.stringify(formData)}`;
+            } catch {
+              content = `User submitted form "${formId}"`;
+            }
+          } else if (meta?.type === 'protocol_system_event') {
+            const parts = msg.content.split(':');
+            content = `System event (${parts[1] || 'unknown'}): ${parts.slice(2).join(':')}`;
+          }
+          claudeMessages.push({ role: 'user', content });
         } else if (msg.role === 'assistant') {
           // Reconstruct assistant message - may include tool calls
           const contentBlocks: Anthropic.ContentBlockParam[] = [];
@@ -134,36 +288,88 @@ export class ChatService {
       }));
 
       // 5. Stream response from Claude with tool-use loop
-      let fullResponse = '';
+      fullResponse = '';
       let continueLoop = true;
-      let streamedText = '';
+      streamedText = '';
+      let toolIterations = 0;
+
+      const abortController = new AbortController();
+      this.activeStreams.set(conversationId, abortController);
 
       while (continueLoop) {
         continueLoop = false;
+        toolIterations++;
 
-        const stream = this.getClient().messages.stream({
-          model: MODEL,
-          max_tokens: 4096,
-          system: JERRY_SYSTEM_PROMPT,
-          messages: claudeMessages,
-          tools,
-        });
+        // TASK 3: Tool loop guard
+        if (toolIterations > MAX_TOOL_ITERATIONS) {
+          logger.warn({ conversationId, iterations: toolIterations }, 'Tool loop guard triggered');
+          claudeMessages.push({
+            role: 'user',
+            content: 'You have used too many tools in this turn. Please provide a final answer to the user without using any more tools.',
+          });
+          // Do one final call without tools to get the text response
+          const finalStream = this.getClient().messages.stream({
+            model: MODEL,
+            max_tokens: 4096,
+            system: JERRY_SYSTEM_PROMPT,
+            messages: claudeMessages,
+            // No tools - force text-only response
+          }, { signal: abortController.signal });
+          streamedText = '';
+          finalStream.on('text', (text) => {
+            streamedText += text;
+            fullResponse += text;
+            if (onToken) onToken(text);
+          });
+          await finalStream.finalMessage();
+          break;
+        }
 
+        // TASK 2: Wrap stream creation + consumption in retry logic
         let currentToolCalls: any[] = [];
-        streamedText = '';
 
-        // Use event-based streaming
-        stream.on('text', (text) => {
-          streamedText += text;
-          fullResponse += text;
-          if (onToken) onToken(text);
+        const createAndConsumeStream = async () => {
+          const stream = this.getClient().messages.stream({
+            model: MODEL,
+            max_tokens: 4096,
+            system: JERRY_SYSTEM_PROMPT,
+            messages: claudeMessages,
+            tools,
+          }, { signal: abortController.signal });
+
+          // Reset for this attempt
+          currentToolCalls = [];
+          streamedText = '';
+
+          stream.on('text', (text) => {
+            streamedText += text;
+            fullResponse += text;
+            if (onToken) onToken(text);
+          });
+
+          stream.on('error', (error) => {
+            logger.error({ error, conversationId }, 'Stream error from Anthropic');
+          });
+
+          return stream.finalMessage();
+        };
+
+        const finalMessage = await retryWithBackoff(createAndConsumeStream, {
+          maxRetries: 3,
+          baseDelay: 1000,
+          shouldRetry: (error: any) => {
+            const status = error?.status || error?.error?.status;
+            if (status === 429 || status === 529 || status >= 500) return true;
+            if (error?.error?.type === 'overloaded_error') return true;
+            if (!status && error.message?.includes('fetch')) return true; // network error
+            return false;
+          },
+          onRetry: (attempt, error) => {
+            logger.warn({ attempt, error: error.message, conversationId }, 'Retrying Anthropic stream');
+            // Reset streaming state for retry
+            fullResponse = fullResponse.substring(0, fullResponse.length - streamedText.length);
+          },
         });
-
-        stream.on('error', (error) => {
-          logger.error({ error, conversationId }, 'Stream error from Anthropic');
-        });
-
-        const finalMessage = await stream.finalMessage();
 
         // Check for tool use in the response
         const toolUseBlocks = finalMessage.content.filter(
@@ -258,15 +464,35 @@ export class ChatService {
         },
       });
 
-      // 7. Auto-generate title if this is the first exchange
+      // 7. Auto-generate title if this is the first exchange (TASK 5: AI-generated titles)
       const messageCount = await prisma.message.count({ where: { conversationId } });
       if (messageCount <= 3) {
-        // Generate a short title from the first user message
-        const title = userMessage.length > 50 ? userMessage.substring(0, 50) + '...' : userMessage;
-        await prisma.conversation.update({
-          where: { id: conversationId },
-          data: { title },
-        });
+        try {
+          const titleResponse = await this.getClient().messages.create({
+            model: 'claude-haiku-4-5-20241022',
+            max_tokens: 20,
+            messages: [
+              {
+                role: 'user',
+                content: `Generate a 3-6 word title for this conversation. Only output the title, nothing else.\n\nUser: ${userMessage}\nAssistant: ${fullResponse?.substring(0, 200) || streamedText?.substring(0, 200)}`,
+              },
+            ],
+          });
+          const generatedTitle = (titleResponse.content[0] as any)?.text?.trim();
+          if (generatedTitle && generatedTitle.length > 0) {
+            await prisma.conversation.update({
+              where: { id: conversationId },
+              data: { title: generatedTitle },
+            });
+          }
+        } catch (titleError) {
+          logger.warn({ error: titleError, conversationId }, 'Failed to generate AI title, using fallback');
+          const title = userMessage.length > 50 ? userMessage.substring(0, 50) + '...' : userMessage;
+          await prisma.conversation.update({
+            where: { id: conversationId },
+            data: { title },
+          });
+        }
       }
 
       // Update conversation updatedAt
@@ -275,13 +501,40 @@ export class ChatService {
         data: { updatedAt: new Date() },
       });
 
+      this.activeStreams.delete(conversationId);
+
       if (onDone) onDone(fullResponse);
 
       return savedMessage;
     } catch (error: any) {
+      if (error?.name === 'AbortError' || error?.message?.includes('aborted')) {
+        // Stream was cancelled by user - save partial response
+        if (fullResponse || streamedText) {
+          await prisma.message.create({
+            data: {
+              conversationId,
+              role: 'assistant',
+              content: (fullResponse || streamedText) + '\n\n*[Response cancelled]*',
+            },
+          });
+        }
+        this.activeStreams.delete(conversationId);
+        if (onDone) onDone(fullResponse || streamedText || '');
+        return null;
+      }
       logger.error({ error, conversationId }, 'Error in sendMessage');
       if (onError) onError(error.message || 'An error occurred');
       throw error;
+    }
+  }
+  async cancelStream(conversationId: string): Promise<void> {
+    const controller = this.activeStreams.get(conversationId);
+    if (controller) {
+      controller.abort();
+      this.activeStreams.delete(conversationId);
+
+      // Save partial response if any was accumulated
+      logger.info({ conversationId }, 'Stream cancelled by user');
     }
   }
 }

@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { campaignService } from '../campaign/campaign.service';
@@ -14,6 +17,10 @@ import { redis } from '../../config/redis';
 
 import { workflowEngine } from '../workflow/workflow.engine';
 import { permitPipelineService } from '../permit/permit-pipeline.service';
+import { lookupGeoId } from '../../data/geo-ids';
+import { emitJobToConversation, WSEventType } from '../../config/websocket';
+import { ghlClient } from '../../integrations/ghl/client';
+import { getAllPresets, getPresetById } from '../workflow/workflow-presets';
 
 export interface ToolDefinition {
   name: string;
@@ -60,7 +67,7 @@ export const toolDefinitions: ToolDefinition[] = [
           description: 'End date in YYYY-MM-DD format',
         },
       },
-      required: ['permitType', 'city', 'geoId'],
+      required: ['permitType', 'city'],
     },
   },
   {
@@ -866,6 +873,226 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['workflowId'],
     },
   },
+
+  // ==================== BATCH TOOLS (2 new - Phase 2B) ====================
+  {
+    name: 'batch_create_contacts',
+    description: 'Create multiple contacts at once. Accepts an array of contact objects (max 100). Returns created count, skipped (duplicate email), and errors.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contacts: {
+          type: 'array',
+          description: 'Array of contact objects to create',
+          items: {
+            type: 'object',
+            properties: {
+              email: { type: 'string', description: 'Contact email (required)' },
+              firstName: { type: 'string' },
+              lastName: { type: 'string' },
+              phone: { type: 'string' },
+              company: { type: 'string' },
+              title: { type: 'string' },
+              city: { type: 'string' },
+              state: { type: 'string' },
+              tags: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['email'],
+          },
+        },
+      },
+      required: ['contacts'],
+    },
+  },
+  {
+    name: 'batch_enroll_contacts',
+    description: 'Enroll multiple contacts into a campaign at once. Accepts a campaign ID and an array of contact IDs.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        campaignId: { type: 'string', description: 'Campaign ID to enroll contacts into' },
+        contactIds: {
+          type: 'array',
+          description: 'Array of contact IDs to enroll',
+          items: { type: 'string' },
+        },
+      },
+      required: ['campaignId', 'contactIds'],
+    },
+  },
+
+  // ==================== GEO ID LOOKUP TOOL (Phase 2C) ====================
+  {
+    name: 'lookup_geo_id',
+    description: 'Look up a FIPS GeoID code for a US city or county. Useful when the user mentions a city not in the hardcoded list. Supports fuzzy matching and common abbreviations (e.g., "LA" for Los Angeles).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        city: { type: 'string', description: 'City or county name' },
+        state: { type: 'string', description: 'State name or abbreviation (e.g., "CA" or "California")' },
+      },
+      required: ['city'],
+    },
+  },
+
+  // ==================== CONTACT LABEL TOOLS (Jerry $900 Scope) ====================
+  {
+    name: 'add_contact_label',
+    description: 'Add a structured label to a contact',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+        name: { type: 'string', description: 'Label name (e.g., "Hot", "Warm", "Cold", "Customer", "DNC")' },
+        color: { type: 'string', description: 'Optional hex or tailwind color name (e.g., "#22c55e")' },
+      },
+      required: ['contactId', 'name'],
+    },
+  },
+  {
+    name: 'remove_contact_label',
+    description: 'Remove a label from a contact',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+        name: { type: 'string', description: 'Label name to remove' },
+      },
+      required: ['contactId', 'name'],
+    },
+  },
+  {
+    name: 'list_contact_labels',
+    description: 'List all labels on a contact',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+      },
+      required: ['contactId'],
+    },
+  },
+
+  // ==================== CONTACT NOTE TOOL (Jerry $900 Scope) ====================
+  {
+    name: 'add_contact_note',
+    description: 'Add a note to a contact',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+        note: { type: 'string', description: 'The note content to add' },
+      },
+      required: ['contactId', 'note'],
+    },
+  },
+
+  // ==================== TAG TOOLS (Jerry $900 Scope) ====================
+  {
+    name: 'add_contact_tag',
+    description: 'Add a tag to a contact',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+        tag: { type: 'string', description: 'The tag to add' },
+      },
+      required: ['contactId', 'tag'],
+    },
+  },
+  {
+    name: 'remove_contact_tag',
+    description: 'Remove a tag from a contact',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+        tag: { type: 'string', description: 'The tag to remove' },
+      },
+      required: ['contactId', 'tag'],
+    },
+  },
+
+  // ==================== HOMEOWNER/CONTRACTOR TOOLS (Jerry $900 Scope) ====================
+  {
+    name: 'lookup_homeowner_by_address',
+    description: 'Look up homeowners by address',
+    input_schema: {
+      type: 'object',
+      properties: {
+        address: { type: 'string', description: 'Street address to search for' },
+        city: { type: 'string', description: 'City to narrow search' },
+        state: { type: 'string', description: 'State to narrow search' },
+      },
+      required: ['address'],
+    },
+  },
+  {
+    name: 'get_contractor_brief',
+    description: 'Get a comprehensive pre-call brief for a contractor',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+      },
+      required: ['contactId'],
+    },
+  },
+
+  // ==================== MARK AS CUSTOMER (Jerry $900 Scope) ====================
+  {
+    name: 'mark_as_customer',
+    description: 'Mark a contact as a customer - stops all enrollments and adds Customer label',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+      },
+      required: ['contactId'],
+    },
+  },
+
+  // ==================== WORKFLOW PRESET TOOLS (Jerry $900 Scope) ====================
+  {
+    name: 'list_workflow_presets',
+    description: 'List available workflow presets with descriptions and trigger hints',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'run_workflow_preset',
+    description: 'Run a workflow preset by ID with optional parameters',
+    input_schema: {
+      type: 'object',
+      properties: {
+        presetId: { type: 'string', description: 'The preset ID to run (e.g., "weekly-prospecting", "monthly-review")' },
+        params: {
+          type: 'object',
+          description: 'Optional override parameters for step params (e.g., city, geoId, batchSize)',
+        },
+      },
+      required: ['presetId'],
+    },
+  },
+
+  // ==================== GHL OPPORTUNITY TOOL (Jerry $900 Scope) ====================
+  {
+    name: 'create_ghl_opportunity',
+    description: 'Create a GHL opportunity for a contact in the sales pipeline',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The contact ID' },
+        name: { type: 'string', description: 'Opportunity name (e.g., "Solar Install - John Smith")' },
+        monetaryValue: { type: 'number', description: 'Optional monetary value of the opportunity' },
+        pipelineId: { type: 'string', description: 'Optional pipeline ID (uses default from settings if not provided)' },
+        stageId: { type: 'string', description: 'Optional stage ID (uses default from settings if not provided)' },
+      },
+      required: ['contactId', 'name'],
+    },
+  },
 ];
 
 // Tool execution map
@@ -884,12 +1111,28 @@ export async function executeTool(
         const startDate = input.startDate || new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString().split('T')[0];
         const endDate = input.endDate || new Date().toISOString().split('T')[0];
 
+        // Auto-resolve geoId from city name (defense in depth)
+        let resolvedGeoId = input.geoId;
+        const geoResult = lookupGeoId(input.city);
+        if (geoResult && !Array.isArray(geoResult)) {
+          resolvedGeoId = geoResult.geoId;
+        } else if (Array.isArray(geoResult) && geoResult.length > 0) {
+          resolvedGeoId = geoResult[0].geoId;
+        }
+
+        if (!resolvedGeoId) {
+          return {
+            success: false,
+            error: `Could not resolve a FIPS geoId for "${input.city}". Please ask the user which county this city is in, then call lookup_geo_id with the county name.`,
+          };
+        }
+
         // Create the record first so we can return the ID immediately
         const search = await prisma.permitSearch.create({
           data: {
             permitType: input.permitType,
             city: input.city,
-            geoId: input.geoId,
+            geoId: resolvedGeoId,
             startDate: new Date(startDate),
             endDate: new Date(endDate),
             status: 'PENDING',
@@ -901,12 +1144,24 @@ export async function executeTool(
         permitPipelineService.startSearch({
           permitType: input.permitType,
           city: input.city,
-          geoId: input.geoId,
+          geoId: resolvedGeoId,
           startDate,
           endDate,
           conversationId: context?.conversationId,
-        }, search.id).catch(err => {
+        }, search.id).catch(async (err) => {
           logger.error({ err: err.message, searchId: search.id }, 'Permit pipeline failed');
+          await prisma.permitSearch.update({
+            where: { id: search.id },
+            data: { status: 'FAILED' },
+          }).catch(() => {});
+          if (context?.conversationId) {
+            emitJobToConversation(context.conversationId, WSEventType.JOB_FAILED, {
+              jobId: search.id,
+              jobType: 'permit:search',
+              status: 'failed',
+              error: err.message,
+            });
+          }
         });
 
         return {
@@ -1365,14 +1620,28 @@ export async function executeTool(
         const csv = await contactExportService.exportToCSV(filters);
         const lineCount = csv.split('\n').length - 1; // subtract header
 
+        // Write CSV to temp file for download
+        const exportDir = path.join(process.cwd(), 'tmp', 'exports');
+        if (!fs.existsSync(exportDir)) {
+          fs.mkdirSync(exportDir, { recursive: true });
+        }
+        const filename = `${randomUUID()}.csv`;
+        const filePath = path.join(exportDir, filename);
+        fs.writeFileSync(filePath, csv);
+
+        // Auto-delete after 10 minutes
+        setTimeout(() => {
+          try { fs.unlinkSync(filePath); } catch {}
+        }, 10 * 60 * 1000);
+
+        // Return download URL instead of CSV content
         return {
           success: true,
           data: {
-            recordCount: lineCount,
-            filename: contactExportService.getFilename(),
-            csvPreview: csv.substring(0, 1000) + (csv.length > 1000 ? '\n... (truncated)' : ''),
-            totalSize: csv.length,
-            message: `Exported ${lineCount} contacts to CSV.`,
+            downloadUrl: `/api/v1/chat/exports/${filename}`,
+            fileName: `contacts_export_${new Date().toISOString().split('T')[0]}.csv`,
+            rowCount: lineCount,
+            preview: csv.split('\n').slice(0, 6).join('\n'), // First 5 rows as preview
           },
         };
       }
@@ -1964,6 +2233,705 @@ export async function executeTool(
             name: cancelledWorkflow.name,
             status: cancelledWorkflow.status,
             message: `Workflow "${cancelledWorkflow.name}" cancelled successfully.`,
+          },
+        };
+      }
+
+      // ==================== BATCH TOOLS (Phase 2B) ====================
+
+      case 'batch_create_contacts': {
+        const { contacts } = input;
+        if (!Array.isArray(contacts) || contacts.length === 0) {
+          return { success: false, error: 'contacts must be a non-empty array' };
+        }
+        if (contacts.length > 100) {
+          return { success: false, error: 'Maximum 100 contacts per batch' };
+        }
+
+        let created = 0;
+        let skipped = 0;
+        const errors: string[] = [];
+
+        for (const contact of contacts) {
+          try {
+            if (!contact.email) {
+              errors.push(`Missing email for contact: ${JSON.stringify(contact)}`);
+              continue;
+            }
+
+            // Check for existing contact
+            const existing = await prisma.contact.findUnique({
+              where: { email: contact.email.toLowerCase().trim() },
+            });
+
+            if (existing) {
+              skipped++;
+              continue;
+            }
+
+            await prisma.contact.create({
+              data: {
+                email: contact.email.toLowerCase().trim(),
+                firstName: contact.firstName || null,
+                lastName: contact.lastName || null,
+                fullName: [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null,
+                phone: contact.phone || null,
+                title: contact.title || null,
+                city: contact.city || null,
+                state: contact.state || null,
+                tags: contact.tags || [],
+                source: 'batch_import',
+              },
+            });
+            created++;
+          } catch (err: any) {
+            if (err.code === 'P2002') {
+              skipped++;
+            } else {
+              errors.push(`Error creating ${contact.email}: ${err.message}`);
+            }
+          }
+        }
+
+        return {
+          success: true,
+          data: {
+            total: contacts.length,
+            created,
+            skipped,
+            errors: errors.length > 0 ? errors : undefined,
+          },
+        };
+      }
+
+      case 'batch_enroll_contacts': {
+        const { campaignId, contactIds } = input;
+        if (!campaignId) return { success: false, error: 'campaignId is required' };
+        if (!Array.isArray(contactIds) || contactIds.length === 0) {
+          return { success: false, error: 'contactIds must be a non-empty array' };
+        }
+
+        const batchCampaign = await prisma.campaign.findUnique({
+          where: { id: campaignId },
+          include: {
+            _count: { select: { enrollments: true } },
+          },
+        });
+        if (!batchCampaign) return { success: false, error: `Campaign not found: ${campaignId}` };
+
+        // Pre-enrollment validation
+        const eligible: any[] = [];
+        const skippedContacts: Array<{ contactId: string; contactName: string | null; reason: string }> = [];
+
+        // Fetch all contacts in one query for efficiency
+        const contacts = await prisma.contact.findMany({
+          where: { id: { in: contactIds } },
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            status: true,
+            emailValidationStatus: true,
+            campaignEnrollments: {
+              where: { campaignId, status: 'ENROLLED' },
+              select: { id: true },
+            },
+          },
+        });
+
+        const contactMap = new Map(contacts.map((c) => [c.id, c]));
+
+        for (const contactId of contactIds) {
+          const contact = contactMap.get(contactId);
+          if (!contact) {
+            skippedContacts.push({ contactId, contactName: null, reason: 'not_found' });
+            continue;
+          }
+
+          // Check already enrolled in same campaign
+          if (contact.campaignEnrollments.length > 0) {
+            skippedContacts.push({ contactId, contactName: contact.fullName, reason: 'already_enrolled' });
+            continue;
+          }
+
+          // Check unsubscribed
+          if (contact.status === 'UNSUBSCRIBED') {
+            skippedContacts.push({ contactId, contactName: contact.fullName, reason: 'unsubscribed' });
+            continue;
+          }
+
+          // Check customer
+          if (contact.status === 'CUSTOMER') {
+            skippedContacts.push({ contactId, contactName: contact.fullName, reason: 'customer' });
+            continue;
+          }
+
+          // Check bounced
+          if (contact.status === 'BOUNCED') {
+            skippedContacts.push({ contactId, contactName: contact.fullName, reason: 'bounced' });
+            continue;
+          }
+
+          // Check invalid email
+          if (!contact.email || contact.emailValidationStatus === 'INVALID') {
+            skippedContacts.push({ contactId, contactName: contact.fullName, reason: 'invalid_email' });
+            continue;
+          }
+
+          eligible.push(contact);
+        }
+
+        // Enroll eligible contacts
+        let enrolled = 0;
+        const enrollErrors: string[] = [];
+
+        for (const contact of eligible) {
+          try {
+            await prisma.campaignEnrollment.create({
+              data: {
+                campaignId,
+                contactId: contact.id,
+                status: 'ENROLLED',
+              },
+            });
+            enrolled++;
+          } catch (err: any) {
+            if (err.code === 'P2002') {
+              skippedContacts.push({ contactId: contact.id, contactName: contact.fullName, reason: 'already_enrolled' });
+            } else {
+              enrollErrors.push(`Error enrolling ${contact.id}: ${err.message}`);
+            }
+          }
+        }
+
+        return {
+          success: true,
+          data: {
+            campaignId,
+            campaignName: batchCampaign.name,
+            total: contactIds.length,
+            eligible: eligible.length,
+            enrolled,
+            skipped: skippedContacts,
+            skippedCount: skippedContacts.length,
+            errors: enrollErrors.length > 0 ? enrollErrors : undefined,
+            message: `Enrolled ${enrolled} of ${contactIds.length} contacts into "${batchCampaign.name}". ${skippedContacts.length} skipped.`,
+          },
+        };
+      }
+
+      // ==================== GEO ID LOOKUP TOOL (Phase 2C) ====================
+
+      case 'lookup_geo_id': {
+        const { city, state } = input;
+        if (!city) return { success: false, error: 'city is required' };
+
+        const result = lookupGeoId(city, state);
+
+        if (!result) {
+          return {
+            success: true,
+            data: {
+              found: false,
+              message: `No GeoID found for "${city}${state ? ', ' + state : ''}". The city may not be in our database. Please ask the user for their county FIPS code.`,
+            },
+          };
+        }
+
+        if (Array.isArray(result)) {
+          return {
+            success: true,
+            data: {
+              found: true,
+              multiple: true,
+              message: `Multiple matches found for "${city}". Please confirm which one:`,
+              matches: result.map(r => ({
+                geoId: r.geoId,
+                county: r.county,
+                state: r.state,
+              })),
+            },
+          };
+        }
+
+        return {
+          success: true,
+          data: {
+            found: true,
+            geoId: result.geoId,
+            county: result.county,
+            state: result.state,
+          },
+        };
+      }
+
+      // ==================== CONTACT LABEL TOOLS (Jerry $900 Scope) ====================
+
+      case 'add_contact_label': {
+        try {
+          const label = await prisma.contactLabel.create({
+            data: {
+              contactId: input.contactId,
+              name: input.name,
+              ...(input.color && { color: input.color }),
+            },
+          });
+
+          return {
+            success: true,
+            data: {
+              label,
+              message: `Label "${input.name}" added to contact ${input.contactId}.`,
+            },
+          };
+        } catch (err: any) {
+          // Handle unique constraint violation (label already exists)
+          if (err.code === 'P2002') {
+            return {
+              success: true,
+              data: {
+                message: `Label "${input.name}" already exists on contact ${input.contactId}.`,
+                alreadyExists: true,
+              },
+            };
+          }
+          throw err;
+        }
+      }
+
+      case 'remove_contact_label': {
+        await prisma.contactLabel.deleteMany({
+          where: {
+            contactId: input.contactId,
+            name: input.name,
+          },
+        });
+
+        return {
+          success: true,
+          data: {
+            message: `Label "${input.name}" removed from contact ${input.contactId}.`,
+          },
+        };
+      }
+
+      case 'list_contact_labels': {
+        const labels = await prisma.contactLabel.findMany({
+          where: { contactId: input.contactId },
+        });
+
+        return {
+          success: true,
+          data: {
+            labels,
+            total: labels.length,
+            contactId: input.contactId,
+          },
+        };
+      }
+
+      // ==================== CONTACT NOTE TOOL (Jerry $900 Scope) ====================
+
+      case 'add_contact_note': {
+        const noteContact = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+          select: { id: true, ghlContactId: true, fullName: true },
+        });
+
+        if (!noteContact) {
+          return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+        }
+
+        // Sync note to GHL if contact is linked
+        if (noteContact.ghlContactId) {
+          try {
+            await ghlClient.addContactNote(noteContact.ghlContactId, input.note);
+          } catch (ghlErr: any) {
+            logger.warn(
+              { contactId: input.contactId, ghlContactId: noteContact.ghlContactId, error: ghlErr.message },
+              'Failed to sync note to GHL, continuing with local log'
+            );
+          }
+        }
+
+        // Log to ActivityLog
+        await prisma.activityLog.create({
+          data: {
+            contactId: input.contactId,
+            action: 'NOTE_ADDED',
+            description: input.note,
+            actorType: 'ai',
+          },
+        });
+
+        return {
+          success: true,
+          data: {
+            message: `Note added to contact ${noteContact.fullName || input.contactId}.${noteContact.ghlContactId ? ' Also synced to GHL.' : ''}`,
+            syncedToGhl: !!noteContact.ghlContactId,
+          },
+        };
+      }
+
+      // ==================== TAG TOOLS (Jerry $900 Scope) ====================
+
+      case 'add_contact_tag': {
+        const tagContact = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+          select: { id: true, tags: true },
+        });
+
+        if (!tagContact) {
+          return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+        }
+
+        // Check if tag already exists to avoid duplicates
+        if (tagContact.tags.includes(input.tag)) {
+          return {
+            success: true,
+            data: {
+              message: `Tag "${input.tag}" already exists on contact ${input.contactId}.`,
+              alreadyExists: true,
+            },
+          };
+        }
+
+        const tagUpdated = await prisma.contact.update({
+          where: { id: input.contactId },
+          data: { tags: { push: input.tag } },
+        });
+
+        return {
+          success: true,
+          data: {
+            tags: tagUpdated.tags,
+            message: `Tag "${input.tag}" added to contact ${input.contactId}.`,
+          },
+        };
+      }
+
+      case 'remove_contact_tag': {
+        const removeTagContact = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+          select: { id: true, tags: true },
+        });
+
+        if (!removeTagContact) {
+          return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+        }
+
+        const filteredTags = removeTagContact.tags.filter((t) => t !== input.tag);
+
+        const tagRemovedContact = await prisma.contact.update({
+          where: { id: input.contactId },
+          data: { tags: filteredTags },
+        });
+
+        return {
+          success: true,
+          data: {
+            tags: tagRemovedContact.tags,
+            message: `Tag "${input.tag}" removed from contact ${input.contactId}.`,
+          },
+        };
+      }
+
+      // ==================== HOMEOWNER/CONTRACTOR TOOLS (Jerry $900 Scope) ====================
+
+      case 'lookup_homeowner_by_address': {
+        const addressWhere: Record<string, any> = {
+          street: { contains: input.address, mode: 'insensitive' },
+        };
+        if (input.city) {
+          addressWhere.city = { contains: input.city, mode: 'insensitive' };
+        }
+        if (input.state) {
+          addressWhere.state = { contains: input.state, mode: 'insensitive' };
+        }
+
+        const homeowners = await prisma.homeowner.findMany({
+          where: addressWhere,
+          include: { connections: true },
+          take: 20,
+        });
+
+        return {
+          success: true,
+          data: {
+            homeowners,
+            total: homeowners.length,
+            message: homeowners.length > 0
+              ? `Found ${homeowners.length} homeowner(s) matching "${input.address}".`
+              : `No homeowners found matching "${input.address}".`,
+          },
+        };
+      }
+
+      case 'get_contractor_brief': {
+        const contractor = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+          include: {
+            activityLogs: {
+              take: 10,
+              orderBy: { createdAt: 'desc' },
+            },
+            replies: true,
+            campaignEnrollments: {
+              include: { campaign: true },
+            },
+            labels: true,
+          },
+        });
+
+        if (!contractor) {
+          return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+        }
+
+        return {
+          success: true,
+          data: {
+            contact: {
+              id: contractor.id,
+              fullName: contractor.fullName,
+              firstName: contractor.firstName,
+              lastName: contractor.lastName,
+              email: contractor.email,
+              phone: contractor.phone,
+              phoneFormatted: contractor.phoneFormatted,
+              title: contractor.title,
+              city: contractor.city,
+              state: contractor.state,
+              status: contractor.status,
+              tags: contractor.tags,
+              source: contractor.source,
+              hasReplied: contractor.hasReplied,
+              repliedAt: contractor.repliedAt,
+              lastContactedAt: contractor.lastContactedAt,
+              ghlContactId: contractor.ghlContactId,
+              permitType: contractor.permitType,
+              permitCity: contractor.permitCity,
+              licenseNumber: contractor.licenseNumber,
+              avgJobValue: contractor.avgJobValue,
+              totalJobValue: contractor.totalJobValue,
+              permitCount: contractor.permitCount,
+              revenue: contractor.revenue,
+              employeeCount: contractor.employeeCount,
+              website: contractor.website,
+              rating: contractor.rating,
+              reviewCount: contractor.reviewCount,
+              seniorityLevel: contractor.seniorityLevel,
+              department: contractor.department,
+              createdAt: contractor.createdAt,
+              updatedAt: contractor.updatedAt,
+            },
+            labels: contractor.labels,
+            recentActivity: contractor.activityLogs,
+            replies: contractor.replies,
+            campaignEnrollments: contractor.campaignEnrollments.map((e) => ({
+              id: e.id,
+              campaignId: e.campaignId,
+              campaignName: e.campaign.name,
+              status: e.status,
+              enrolledAt: e.enrolledAt,
+              stoppedAt: e.stoppedAt,
+              stoppedReason: e.stoppedReason,
+            })),
+          },
+        };
+      }
+
+      // ==================== MARK AS CUSTOMER (Jerry $900 Scope) ====================
+
+      case 'mark_as_customer': {
+        const custContact = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+          select: { id: true, fullName: true, status: true },
+        });
+
+        if (!custContact) {
+          return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+        }
+
+        // 1. Update contact status to CUSTOMER
+        await prisma.contact.update({
+          where: { id: input.contactId },
+          data: { status: 'CUSTOMER' },
+        });
+
+        // 2. Stop all active campaign enrollments
+        const stoppedEnrollments = await prisma.campaignEnrollment.updateMany({
+          where: { contactId: input.contactId, status: 'ENROLLED' },
+          data: { status: 'STOPPED', stoppedAt: new Date(), stoppedReason: 'marked_as_customer' },
+        });
+
+        // 3. Add Customer label (catch if already exists)
+        try {
+          await prisma.contactLabel.create({
+            data: {
+              contactId: input.contactId,
+              name: 'Customer',
+              color: '#22c55e',
+            },
+          });
+        } catch (labelErr: any) {
+          if (labelErr.code !== 'P2002') throw labelErr;
+          // Label already exists, that's fine
+        }
+
+        // 4. Log to ActivityLog
+        await prisma.activityLog.create({
+          data: {
+            contactId: input.contactId,
+            action: 'MARKED_AS_CUSTOMER',
+            description: 'Marked as customer — removed from all active sequences',
+            actorType: 'ai',
+          },
+        });
+
+        return {
+          success: true,
+          data: {
+            contactId: input.contactId,
+            contactName: custContact.fullName,
+            previousStatus: custContact.status,
+            newStatus: 'CUSTOMER',
+            enrollmentsStopped: stoppedEnrollments.count,
+            message: `${custContact.fullName || input.contactId} marked as customer. ${stoppedEnrollments.count} active enrollment(s) stopped, Customer label added.`,
+          },
+        };
+      }
+
+      // ==================== WORKFLOW PRESET TOOLS (Jerry $900 Scope) ====================
+
+      case 'list_workflow_presets': {
+        const presets = getAllPresets();
+
+        return {
+          success: true,
+          data: {
+            presets: presets.map((p) => ({
+              id: p.id,
+              name: p.name,
+              description: p.description,
+              triggerHints: p.triggerHints,
+              stepCount: p.steps.length,
+            })),
+            total: presets.length,
+          },
+        };
+      }
+
+      case 'run_workflow_preset': {
+        const preset = getPresetById(input.presetId);
+        if (!preset) {
+          return {
+            success: false,
+            error: `Workflow preset not found with ID: "${input.presetId}". Use list_workflow_presets to see available presets.`,
+          };
+        }
+
+        // Merge any override params into step params
+        const stepsWithOverrides = preset.steps.map((step) => {
+          const mergedParams = { ...step.params };
+          if (input.params) {
+            // Apply override params to any step that has matching keys
+            for (const [key, value] of Object.entries(input.params)) {
+              if (key in mergedParams) {
+                (mergedParams as Record<string, any>)[key] = value;
+              }
+            }
+          }
+          return {
+            name: step.name,
+            action: step.action,
+            params: mergedParams,
+            onFailure: step.onFailure || 'skip',
+          };
+        });
+
+        // Return the preset plan for Jerry to show as a confirmation card
+        // Don't auto-execute — let Jerry confirm first
+        return {
+          success: true,
+          data: {
+            presetId: preset.id,
+            presetName: preset.name,
+            description: preset.description,
+            steps: stepsWithOverrides.map((s, i) => ({
+              order: i + 1,
+              name: s.name,
+              action: s.action,
+              params: s.params,
+              onFailure: s.onFailure,
+            })),
+            totalSteps: stepsWithOverrides.length,
+            message: `Workflow preset "${preset.name}" ready to execute with ${stepsWithOverrides.length} steps. Use create_workflow to start it.`,
+          },
+        };
+      }
+
+      // ==================== GHL OPPORTUNITY TOOL (Jerry $900 Scope) ====================
+
+      case 'create_ghl_opportunity': {
+        const oppContact = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+          select: { id: true, ghlContactId: true, fullName: true },
+        });
+
+        if (!oppContact) {
+          return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+        }
+
+        if (!oppContact.ghlContactId) {
+          return { success: false, error: 'Contact not synced to GHL. The contact must have a ghlContactId to create an opportunity.' };
+        }
+
+        // Get pipelineId/stageId from params or fall back to Settings
+        let pipelineId = input.pipelineId;
+        let stageId = input.stageId;
+
+        if (!pipelineId || !stageId) {
+          const settings = await prisma.settings.findFirst();
+          if (!pipelineId) pipelineId = settings?.ghlPipelineId;
+          if (!stageId) stageId = settings?.ghlDefaultStageId;
+        }
+
+        if (!pipelineId) {
+          return { success: false, error: 'No pipelineId provided and no default pipeline configured in settings.' };
+        }
+        if (!stageId) {
+          return { success: false, error: 'No stageId provided and no default stage configured in settings.' };
+        }
+
+        const opportunity = await ghlClient.createOpportunity({
+          pipelineId,
+          stageId,
+          contactId: oppContact.ghlContactId,
+          name: input.name,
+          ...(input.monetaryValue !== undefined && { monetaryValue: input.monetaryValue }),
+        });
+
+        // Log to ActivityLog
+        await prisma.activityLog.create({
+          data: {
+            contactId: input.contactId,
+            action: 'GHL_OPPORTUNITY_CREATED',
+            description: `GHL opportunity created: "${input.name}"`,
+            actorType: 'ai',
+            metadata: {
+              opportunityId: opportunity.id,
+              pipelineId,
+              stageId,
+              monetaryValue: input.monetaryValue,
+            },
+          },
+        });
+
+        return {
+          success: true,
+          data: {
+            opportunity,
+            message: `GHL opportunity "${input.name}" created for ${oppContact.fullName || input.contactId}.`,
           },
         };
       }

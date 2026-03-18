@@ -101,7 +101,7 @@ export class ShovelsScraperService {
     }
 
     logger.info({ totalScraped, totalImported, duplicates, filtered, errors: errors.length }, 'Shovels scrape complete');
-    return { success: true, totalScraped, totalImported, duplicates, filtered, errors, searchesRun: 1 };
+    return { success: errors.length === 0, totalScraped, totalImported, duplicates, filtered, errors, searchesRun: 1 };
   }
 
   private async importContact(normalized: any): Promise<'imported' | 'duplicate' | 'skipped'> {

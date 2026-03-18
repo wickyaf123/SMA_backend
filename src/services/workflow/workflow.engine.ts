@@ -33,6 +33,7 @@ export interface WorkflowPlanStep {
   action: string;
   params: Record<string, any>;
   onFailure?: 'skip' | 'abort' | 'retry';
+  maxRetries?: number;
   condition?: {
     /** Reference to a previous step output field, e.g. "step_1.output.success" */
     ref: string;
@@ -314,26 +315,83 @@ class WorkflowEngine {
             return;
 
           } else if (onFailure === 'retry') {
-            // Mark step as FAILED, re-enqueue the workflow to retry from this step
+            // Get current retry count from DB
+            const currentStep = await prisma.workflowStep.findUnique({
+              where: { id: step.id },
+              select: { retryCount: true },
+            });
+            const currentRetryCount = (currentStep?.retryCount || 0) + 1;
+            const planStep = (workflow.plan as any[])?.[step.order - 1] as WorkflowPlanStep | undefined;
+            const maxStepRetries = planStep?.maxRetries ?? 3;
+
+            if (currentRetryCount > maxStepRetries) {
+              // Max retries exceeded - treat as abort
+              workflowLogger.warn(
+                { stepOrder: step.order, stepName: step.name, retryCount: currentRetryCount, maxRetries: maxStepRetries },
+                'Step max retries exceeded, aborting workflow'
+              );
+
+              await prisma.workflowStep.update({
+                where: { id: step.id },
+                data: {
+                  status: 'FAILED',
+                  error: `${errorMessage} (failed after ${currentRetryCount - 1} retries)`,
+                  completedAt: new Date(),
+                },
+              });
+
+              // Mark remaining steps as SKIPPED
+              await prisma.workflowStep.updateMany({
+                where: {
+                  workflowId,
+                  status: 'PENDING',
+                },
+                data: { status: 'SKIPPED' },
+              });
+
+              await prisma.workflow.update({
+                where: { id: workflowId },
+                data: {
+                  status: 'FAILED',
+                  error: `Step ${step.order} (${step.name}) failed after ${currentRetryCount - 1} retries: ${errorMessage}`,
+                  completedSteps: completedCount,
+                  completedAt: new Date(),
+                },
+              });
+
+              emitWorkflowFailed(conversationId, {
+                workflowId,
+                error: `Step ${step.order} (${step.name}) failed after ${currentRetryCount - 1} retries: ${errorMessage}`,
+              });
+
+              return;
+            }
+
+            // Increment retry count and re-enqueue with exponential backoff
             await prisma.workflowStep.update({
               where: { id: step.id },
               data: {
-                status: 'PENDING', // Reset to PENDING for retry
+                status: 'PENDING',
                 error: errorMessage,
+                retryCount: currentRetryCount,
               },
             });
 
-            // Re-enqueue with a delay
+            const retryDelay = 5000 * Math.pow(2, currentRetryCount - 1);
+            workflowLogger.info(
+              { stepOrder: step.order, retryCount: currentRetryCount, maxRetries: maxStepRetries, delay: retryDelay },
+              'Step marked for retry with exponential backoff'
+            );
+
             await workflowQueue.add(
               `workflow-retry-${workflowId}-step-${step.order}`,
               { workflowId, stepOrder: step.order },
               {
-                delay: 5000, // 5 second delay before retry
+                delay: retryDelay,
                 jobId: `workflow-retry-${workflowId}-${Date.now()}`,
               }
             );
 
-            // Pause the workflow so it gets picked up by the retry
             await prisma.workflow.update({
               where: { id: workflowId },
               data: { status: 'PAUSED' },

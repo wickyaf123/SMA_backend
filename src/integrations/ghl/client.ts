@@ -21,6 +21,9 @@ import {
   GHLPhoneNumbersResponse,
   GHLContact,
   GHLNoteResponse,
+  CreateOpportunityPayload,
+  GHLOpportunity,
+  GHLOpportunityResponse,
 } from './types';
 
 export class GoHighLevelClient {
@@ -431,6 +434,51 @@ export class GoHighLevelClient {
       logger.error(
         { contactId, workflowId, status: error.response?.status, data: error.response?.data },
         'Failed to add contact to GHL workflow'
+      );
+      throw error;
+    }
+  }
+
+  // ==================== Opportunity Management ====================
+
+  /**
+   * Create a new opportunity in a pipeline
+   * GHL API v2: POST /opportunities/
+   */
+  async createOpportunity(data: CreateOpportunityPayload): Promise<GHLOpportunity> {
+    logger.debug({ data }, 'Creating GHL opportunity');
+
+    const payload = {
+      pipelineId: data.pipelineId,
+      stageId: data.stageId,
+      contactId: data.contactId,
+      name: data.name,
+      status: data.status || 'open',
+      ...(data.monetaryValue !== undefined && { monetaryValue: data.monetaryValue }),
+      ...(data.assignedTo && { assignedTo: data.assignedTo }),
+    };
+
+    try {
+      const response = await this.api.post<GHLOpportunityResponse>(
+        '/opportunities/',
+        payload
+      );
+
+      logger.info(
+        { opportunityId: response.data.opportunity.id, name: data.name },
+        'GHL opportunity created successfully'
+      );
+
+      return response.data.opportunity;
+    } catch (error: any) {
+      logger.error(
+        {
+          requestData: data,
+          status: error.response?.status,
+          responseData: error.response?.data,
+          message: error.message,
+        },
+        'Failed to create GHL opportunity'
       );
       throw error;
     }
