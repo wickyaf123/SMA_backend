@@ -199,6 +199,24 @@ export class ShovelsClient {
     return { cityGeoIdCount: cityCount, zipTotalCount: zipTotal, zipBreakdown, coveragePercent };
   }
 
+  /**
+   * Fetch residents at a specific address by address_id.
+   * Used for contact enrichment — more targeted than zip/city-level getResidents.
+   */
+  async getResidentsByAddress(addressId: string): Promise<ShovelsResident[]> {
+    try {
+      const response = await this.client.get<ShovelsApiResponse<ShovelsResident>>(
+        `/addresses/${addressId}/residents`,
+        { params: { size: 50 } }
+      );
+      return response.data.items;
+    } catch (err: any) {
+      if (err.response?.status === 404) return [];
+      logger.warn({ addressId, error: err.message }, 'Shovels address residents lookup failed');
+      return [];
+    }
+  }
+
   async getPermitById(permitId: string): Promise<ShovelsPermit | null> {
     try {
       const response = await this.client.get<ShovelsPermit>(

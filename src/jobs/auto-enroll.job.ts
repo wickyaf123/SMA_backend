@@ -239,6 +239,49 @@ export class AutoEnrollJob {
         }
       }
 
+      // ==================== SMS DELAY FALLBACK ====================
+      // Check for contacts tagged sms_fallback_pending that have passed the delay window
+      let smsFallbackEnrolled = 0;
+      const smsFallbackDelayDays = (settings as any).smsFallbackDelayDays ?? 5;
+      if (smsFallbackDelayDays > 0 && settings.defaultSmsCampaignId && settings.smsOutreachEnabled) {
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - smsFallbackDelayDays);
+
+        const fallbackContacts = await prisma.contact.findMany({
+          where: {
+            tags: { has: 'sms_fallback_pending' },
+            hasReplied: false,
+            phone: { not: null },
+            lastContactedAt: { lte: cutoffDate },
+          },
+          take: 50,
+        });
+
+        for (const contact of fallbackContacts) {
+          try {
+            await campaignService.enrollContacts(settings.defaultSmsCampaignId, [contact.id]);
+            // Remove the pending tag and add completed tag
+            const updatedTags = contact.tags
+              .filter(t => t !== 'sms_fallback_pending')
+              .concat('sms_fallback_sent');
+            await prisma.contact.update({
+              where: { id: contact.id },
+              data: { tags: updatedTags },
+            });
+            smsFallbackEnrolled++;
+          } catch (err: any) {
+            logger.warn({ contactId: contact.id, error: err.message }, 'SMS fallback enrollment failed');
+          }
+        }
+
+        if (smsFallbackEnrolled > 0) {
+          logger.info(
+            { smsFallbackEnrolled, delayDays: smsFallbackDelayDays },
+            'SMS delay fallback enrollments completed'
+          );
+        }
+      }
+
       const duration = Date.now() - startTime;
 
       logger.info(
@@ -246,6 +289,7 @@ export class AutoEnrollJob {
           contactsProcessed: contacts.length,
           emailEnrollments,
           smsEnrollments,
+          smsFallbackEnrolled,
           routedByRule,
           routedByFallback,
           skippedNoMatch,

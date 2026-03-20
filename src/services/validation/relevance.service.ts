@@ -30,7 +30,7 @@ const INDUSTRY_KEYWORDS: Record<string, string[]> = {
   hvac:       ['hvac', 'heating', 'air conditioning', 'cooling', 'furnace', 'heat pump'],
   roofing:    ['roof', 'roofing', 'shingle', 'gutter'],
   plumbing:   ['plumb', 'plumbing', 'pipe', 'drain', 'sewer', 'water heater'],
-  electrical: ['electric', 'electrical', 'wiring', 'electrician'],
+  electrical: ['electric', 'electrical', 'wiring', 'electrician', 'elec', 'power', 'lighting', 'panel'],
   elevator:   ['elevator', 'escalator', 'lift'],
   demolition: ['demolition', 'demo', 'wrecking'],
   painting:   ['paint', 'painting', 'coating'],
@@ -136,10 +136,14 @@ export function scoreContractorRelevance(
  * Handles fuzzy matching (e.g. "solar" matches "solar_residential", "solar_commercial").
  */
 function findMatchingTagCount(tagTally: Record<string, number>, searchTag: string): number {
+  const searchTerms = INDUSTRY_KEYWORDS[searchTag] || [searchTag];
   let total = 0;
   for (const [tag, count] of Object.entries(tagTally)) {
     const normalizedTag = tag.toLowerCase().replace(/[_-]/g, ' ');
-    if (normalizedTag === searchTag || normalizedTag.includes(searchTag) || searchTag.includes(normalizedTag)) {
+    const matched = searchTerms.some(term =>
+      normalizedTag === term || normalizedTag.includes(term) || term.includes(normalizedTag)
+    );
+    if (matched) {
       total += count;
     }
   }

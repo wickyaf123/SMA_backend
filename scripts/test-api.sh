@@ -253,7 +253,7 @@ test_contacts() {
     ((TESTS_RUN++))
     local ts=$(date +%s)
     local create_data='{"firstName":"E2ETest","lastName":"User_'"$ts"'","email":"e2etest_'"$ts"'@example.com","phone":"+14155551234","title":"Test Owner","source":"e2e_test"}'
-    local response=$(make_request "POST" "$BASE_URL/contacts" "$create_data")
+    local response=$(make_request "POST" "$BASE_URL/api/v1/contacts" "$create_data")
     if check_json_field "$response" ".success" "true"; then
         CREATED_CONTACT_ID=$(echo "$response" | jq -r '.data.id' 2>/dev/null)
         print_pass "Created contact: $CREATED_CONTACT_ID"
@@ -265,7 +265,7 @@ test_contacts() {
     if [ -n "$CREATED_CONTACT_ID" ]; then
         print_test "C2: Get Contact"
         ((TESTS_RUN++))
-        local response=$(make_request "GET" "$BASE_URL/contacts/$CREATED_CONTACT_ID")
+        local response=$(make_request "GET" "$BASE_URL/api/v1/contacts/$CREATED_CONTACT_ID")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Retrieved contact"
         else
@@ -276,7 +276,7 @@ test_contacts() {
     # Test C3: List Contacts
     print_test "C3: List Contacts"
     ((TESTS_RUN++))
-    local response=$(make_request "GET" "$BASE_URL/contacts?limit=5")
+    local response=$(make_request "GET" "$BASE_URL/api/v1/contacts?limit=5")
     if check_json_field "$response" ".success" "true"; then
         local count=$(echo "$response" | jq -r '.data | length' 2>/dev/null)
         print_pass "Listed contacts (count: $count)"
@@ -287,7 +287,7 @@ test_contacts() {
     # Test C4: List with Pagination
     print_test "C4: List with Pagination"
     ((TESTS_RUN++))
-    local response=$(make_request "GET" "$BASE_URL/contacts?page=1&limit=2")
+    local response=$(make_request "GET" "$BASE_URL/api/v1/contacts?page=1&limit=2")
     if check_json_field "$response" ".success" "true"; then
         print_pass "Pagination works"
     else
@@ -299,7 +299,7 @@ test_contacts() {
         print_test "C5: Update Contact"
         ((TESTS_RUN++))
         local update_data='{"title":"Updated Title","tags":["e2e","test"]}'
-        local response=$(make_request "PATCH" "$BASE_URL/contacts/$CREATED_CONTACT_ID" "$update_data")
+        local response=$(make_request "PATCH" "$BASE_URL/api/v1/contacts/$CREATED_CONTACT_ID" "$update_data")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Updated contact"
         else
@@ -310,7 +310,7 @@ test_contacts() {
     # Test C6: Contact Statistics
     print_test "C6: Contact Statistics"
     ((TESTS_RUN++))
-    local response=$(make_request "GET" "$BASE_URL/contacts/stats")
+    local response=$(make_request "GET" "$BASE_URL/api/v1/contacts/stats")
     if check_json_field "$response" ".success" "true"; then
         local total=$(echo "$response" | jq -r '.data.total // .data.totalContacts // "N/A"' 2>/dev/null)
         print_pass "Stats retrieved (total: $total)"
@@ -322,7 +322,7 @@ test_contacts() {
     if [ -n "$CREATED_CONTACT_ID" ]; then
         print_test "C7: Get Contact Activity"
         ((TESTS_RUN++))
-        local response=$(make_request "GET" "$BASE_URL/contacts/$CREATED_CONTACT_ID/activity")
+        local response=$(make_request "GET" "$BASE_URL/api/v1/contacts/$CREATED_CONTACT_ID/activity")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Activity retrieved"
         else
@@ -334,7 +334,7 @@ test_contacts() {
     if [ -n "$CREATED_CONTACT_ID" ]; then
         print_test "C8: Delete Contact"
         ((TESTS_RUN++))
-        local response=$(make_request "DELETE" "$BASE_URL/contacts/$CREATED_CONTACT_ID")
+        local response=$(make_request "DELETE" "$BASE_URL/api/v1/contacts/$CREATED_CONTACT_ID")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Deleted contact"
             CREATED_CONTACT_ID=""
@@ -357,7 +357,7 @@ test_companies() {
     ((TESTS_RUN++))
     local ts=$(date +%s)
     local create_data='{"name":"E2E Test Company '"$ts"'","domain":"e2etest'"$ts"'.com","industry":"HVAC","size":"11-50","city":"San Francisco","state":"CA","country":"US"}'
-    local response=$(make_request "POST" "$BASE_URL/companies" "$create_data")
+    local response=$(make_request "POST" "$BASE_URL/api/v1/companies" "$create_data")
     if check_json_field "$response" ".success" "true"; then
         CREATED_COMPANY_ID=$(echo "$response" | jq -r '.data.id' 2>/dev/null)
         print_pass "Created company: $CREATED_COMPANY_ID"
@@ -368,7 +368,7 @@ test_companies() {
     # Test CO2: List Companies
     print_test "CO2: List Companies"
     ((TESTS_RUN++))
-    local response=$(make_request "GET" "$BASE_URL/companies?limit=5")
+    local response=$(make_request "GET" "$BASE_URL/api/v1/companies?limit=5")
     if check_json_field "$response" ".success" "true"; then
         local count=$(echo "$response" | jq -r '.data | length' 2>/dev/null)
         print_pass "Listed companies (count: $count)"
@@ -380,7 +380,7 @@ test_companies() {
     if [ -n "$CREATED_COMPANY_ID" ]; then
         print_test "CO3: Get Company"
         ((TESTS_RUN++))
-        local response=$(make_request "GET" "$BASE_URL/companies/$CREATED_COMPANY_ID")
+        local response=$(make_request "GET" "$BASE_URL/api/v1/companies/$CREATED_COMPANY_ID")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Retrieved company"
         else
@@ -393,7 +393,7 @@ test_companies() {
         print_test "CO4: Update Company"
         ((TESTS_RUN++))
         local update_data='{"industry":"HVAC and Plumbing","website":"https://e2etest.com"}'
-        local response=$(make_request "PATCH" "$BASE_URL/companies/$CREATED_COMPANY_ID" "$update_data")
+        local response=$(make_request "PATCH" "$BASE_URL/api/v1/companies/$CREATED_COMPANY_ID" "$update_data")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Updated company"
         else
@@ -405,7 +405,7 @@ test_companies() {
     if [ -n "$CREATED_COMPANY_ID" ]; then
         print_test "CO5: Delete Company"
         ((TESTS_RUN++))
-        local response=$(make_request "DELETE" "$BASE_URL/companies/$CREATED_COMPANY_ID")
+        local response=$(make_request "DELETE" "$BASE_URL/api/v1/companies/$CREATED_COMPANY_ID")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Deleted company"
             CREATED_COMPANY_ID=""
@@ -428,7 +428,7 @@ test_campaigns() {
     ((TESTS_RUN++))
     local ts=$(date +%s)
     local create_data='{"name":"E2E Test Campaign '"$ts"'","channel":"SMS","description":"Test campaign from E2E script"}'
-    local response=$(make_request "POST" "$BASE_URL/campaigns" "$create_data")
+    local response=$(make_request "POST" "$BASE_URL/api/v1/campaigns" "$create_data")
     if check_json_field "$response" ".success" "true"; then
         CREATED_CAMPAIGN_ID=$(echo "$response" | jq -r '.data.id' 2>/dev/null)
         print_pass "Created campaign: $CREATED_CAMPAIGN_ID"
@@ -439,7 +439,7 @@ test_campaigns() {
     # Test CA2: List Campaigns
     print_test "CA2: List Campaigns"
     ((TESTS_RUN++))
-    local response=$(make_request "GET" "$BASE_URL/campaigns")
+    local response=$(make_request "GET" "$BASE_URL/api/v1/campaigns")
     if check_json_field "$response" ".success" "true"; then
         local count=$(echo "$response" | jq -r '.data | length' 2>/dev/null)
         print_pass "Listed campaigns (count: $count)"
@@ -451,7 +451,7 @@ test_campaigns() {
     if [ -n "$CREATED_CAMPAIGN_ID" ]; then
         print_test "CA3: Get Campaign"
         ((TESTS_RUN++))
-        local response=$(make_request "GET" "$BASE_URL/campaigns/$CREATED_CAMPAIGN_ID")
+        local response=$(make_request "GET" "$BASE_URL/api/v1/campaigns/$CREATED_CAMPAIGN_ID")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Retrieved campaign"
         else
@@ -464,7 +464,7 @@ test_campaigns() {
         print_test "CA4: Update Campaign"
         ((TESTS_RUN++))
         local update_data='{"description":"Updated description from E2E"}'
-        local response=$(make_request "PATCH" "$BASE_URL/campaigns/$CREATED_CAMPAIGN_ID" "$update_data")
+        local response=$(make_request "PATCH" "$BASE_URL/api/v1/campaigns/$CREATED_CAMPAIGN_ID" "$update_data")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Updated campaign"
         else
@@ -476,7 +476,7 @@ test_campaigns() {
     if [ -n "$CREATED_CAMPAIGN_ID" ]; then
         print_test "CA5: Get Campaign Stats"
         ((TESTS_RUN++))
-        local response=$(make_request "GET" "$BASE_URL/campaigns/$CREATED_CAMPAIGN_ID/stats")
+        local response=$(make_request "GET" "$BASE_URL/api/v1/campaigns/$CREATED_CAMPAIGN_ID/stats")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Retrieved campaign stats"
         else
@@ -488,7 +488,7 @@ test_campaigns() {
     if [ -n "$CREATED_CAMPAIGN_ID" ]; then
         print_test "CA6: Delete Campaign"
         ((TESTS_RUN++))
-        local response=$(make_request "DELETE" "$BASE_URL/campaigns/$CREATED_CAMPAIGN_ID")
+        local response=$(make_request "DELETE" "$BASE_URL/api/v1/campaigns/$CREATED_CAMPAIGN_ID")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Deleted campaign"
             CREATED_CAMPAIGN_ID=""
@@ -600,7 +600,7 @@ test_templates() {
     ((TESTS_RUN++))
     local ts=$(date +%s)
     local create_data='{"name":"E2E Test Template '"$ts"'","channel":"SMS","body":"Hi {{firstName}}, this is a test from {{companyName}}.","description":"E2E test template","variables":["firstName","companyName"]}'
-    local response=$(make_request "POST" "$BASE_URL/templates" "$create_data")
+    local response=$(make_request "POST" "$BASE_URL/api/v1/templates" "$create_data")
     if check_json_field "$response" ".success" "true"; then
         CREATED_TEMPLATE_ID=$(echo "$response" | jq -r '.data.id' 2>/dev/null)
         print_pass "Created template: $CREATED_TEMPLATE_ID"
@@ -611,7 +611,7 @@ test_templates() {
     # Test T2: List Templates
     print_test "T2: List Templates"
     ((TESTS_RUN++))
-    local response=$(make_request "GET" "$BASE_URL/templates")
+    local response=$(make_request "GET" "$BASE_URL/api/v1/templates")
     if check_json_field "$response" ".success" "true"; then
         local count=$(echo "$response" | jq -r '.data | length' 2>/dev/null)
         print_pass "Listed templates (count: $count)"
@@ -624,7 +624,7 @@ test_templates() {
         print_test "T3: Preview Template"
         ((TESTS_RUN++))
         local preview_data='{"firstName":"John","companyName":"Test Corp"}'
-        local response=$(make_request "POST" "$BASE_URL/templates/$CREATED_TEMPLATE_ID/preview" "$preview_data")
+        local response=$(make_request "POST" "$BASE_URL/api/v1/templates/$CREATED_TEMPLATE_ID/preview" "$preview_data")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Previewed template"
         else
@@ -636,7 +636,7 @@ test_templates() {
     if [ -n "$CREATED_TEMPLATE_ID" ]; then
         print_test "T4: Delete Template"
         ((TESTS_RUN++))
-        local response=$(make_request "DELETE" "$BASE_URL/templates/$CREATED_TEMPLATE_ID")
+        local response=$(make_request "DELETE" "$BASE_URL/api/v1/templates/$CREATED_TEMPLATE_ID")
         if check_json_field "$response" ".success" "true"; then
             print_pass "Deleted template"
             CREATED_TEMPLATE_ID=""
@@ -686,7 +686,7 @@ test_activity() {
     # Test A1: Get Activity Logs
     print_test "A1: Get Activity Logs"
     ((TESTS_RUN++))
-    local response=$(make_request "GET" "$BASE_URL/activity?limit=10")
+    local response=$(make_request "GET" "$BASE_URL/api/v1/activity?limit=10")
     if check_json_field "$response" ".success" "true"; then
         print_pass "Retrieved activity logs"
     else
@@ -696,7 +696,7 @@ test_activity() {
     # Test A2: Get Recent Activity
     print_test "A2: Get Recent Activity"
     ((TESTS_RUN++))
-    local response=$(make_request "GET" "$BASE_URL/activity/recent?limit=5")
+    local response=$(make_request "GET" "$BASE_URL/api/v1/activity/recent?limit=5")
     if check_json_field "$response" ".success" "true"; then
         print_pass "Retrieved recent activity"
     else
@@ -706,7 +706,7 @@ test_activity() {
     # Test A3: Get Activity Stats
     print_test "A3: Get Activity Stats"
     ((TESTS_RUN++))
-    local response=$(make_request "GET" "$BASE_URL/activity/stats")
+    local response=$(make_request "GET" "$BASE_URL/api/v1/activity/stats")
     if check_json_field "$response" ".success" "true"; then
         print_pass "Retrieved activity stats"
     else

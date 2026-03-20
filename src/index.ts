@@ -10,6 +10,7 @@ import { settingsService } from './services/settings/settings.service';
 import { initializeWebSocket, closeWebSocket } from './config/websocket';
 import { initializeWorkers, stopWorkers } from './jobs/worker';
 import { closeQueues } from './jobs/queues';
+import { workflowEngine } from './services/workflow/workflow.engine';
 
 /**
  * Initialize default settings (ensures settings record exists)
@@ -72,6 +73,12 @@ async function startServer() {
     // Initialize WebSocket server
     initializeWebSocket(httpServer);
     logger.info('✓ WebSocket server initialized');
+
+    // Recover workflows stuck from previous crash
+    const recovery = await workflowEngine.recoverStuckWorkflows();
+    if (recovery.failed > 0) {
+      logger.info({ ...recovery }, '✓ Workflow crash recovery complete');
+    }
 
     // Initialize BullMQ workers for real-time job processing
     await initializeWorkers();

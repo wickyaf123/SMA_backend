@@ -5,6 +5,9 @@
  * Each preset maps to a sequence of tool actions using the WorkflowPlanStep format
  * from workflow.engine.ts. Step outputs are chained via $ref syntax so that
  * downstream steps can consume upstream results automatically.
+ *
+ * Values injected at execution (e.g. warm-lead IDs) use `{ $runtimeParam: 'name' }`
+ * — see WorkflowRuntimeParamRef / WorkflowPlanParamValue in workflow.engine.ts.
  */
 
 import type { WorkflowPlanStep } from './workflow.engine';
@@ -51,7 +54,8 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         action: 'search_permits',
         params: {
           geoId: { $ref: 'step_1.output.geoId' },
-          daysBack: 7,
+          city: { $ref: 'step_1.output.city' },
+          permitType: '', // Supplied at runtime (e.g. 'residential', 'solar')
         },
         onFailure: 'abort',
       },
@@ -59,7 +63,7 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         name: 'Enrich homeowners',
         action: 'enrich_homeowners',
         params: {
-          homeownerIds: { $ref: 'step_2.output.homeownerIds' },
+          batchSize: 50,
         },
         onFailure: 'skip',
       },
@@ -67,8 +71,8 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         name: 'List net-new contacts',
         action: 'list_contacts',
         params: {
-          filter: 'net-new',
-          permitSearchId: { $ref: 'step_2.output.searchId' },
+          status: 'NEW',
+          city: { $ref: 'step_1.output.city' },
         },
         onFailure: 'skip',
       },
@@ -76,7 +80,7 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         name: 'Surface summary',
         action: 'get_metrics',
         params: {
-          permitSearchId: { $ref: 'step_2.output.searchId' },
+          days: 7,
         },
         onFailure: 'skip',
         _meta: {
@@ -107,7 +111,7 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
       {
         name: 'Get system metrics',
         action: 'get_metrics',
-        params: {},
+        params: { days: 30 },
         onFailure: 'skip',
       },
       {
@@ -138,39 +142,32 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
       {
         name: 'Find contacts missing email',
         action: 'list_contacts',
-        params: {
-          filter: 'missing-email',
-        },
+        params: { hasEmail: false },
         onFailure: 'skip',
-        _meta: { confirmationGated: true, label: 'Missing email' },
+        _meta: { confirmationGated: true, label: 'Missing email', intent: 'Filter results for contacts with no email address' },
       },
       {
         name: 'Find contacts with invalid phone',
         action: 'list_contacts',
-        params: {
-          filter: 'invalid-phone',
-        },
+        params: { phoneValidationStatus: 'INVALID' },
         onFailure: 'skip',
-        _meta: { confirmationGated: true, label: 'Invalid phone' },
+        _meta: { confirmationGated: true, label: 'Invalid phone', intent: 'Filter results for contacts with invalid phone numbers' },
       },
       {
-        name: 'Find duplicate contacts',
+        name: 'Find contacts with invalid email',
         action: 'list_contacts',
-        params: {
-          filter: 'duplicates',
-        },
+        params: { emailValidationStatus: 'INVALID' },
         onFailure: 'skip',
-        _meta: { confirmationGated: true, label: 'Duplicates' },
+        _meta: { confirmationGated: true, label: 'Invalid email', intent: 'Identify contacts with invalid email addresses' },
       },
       {
         name: 'Find stale contacts (90-day no engagement)',
         action: 'list_contacts',
         params: {
-          filter: 'no-engagement',
-          daysSinceEngagement: 90,
+          status: 'NEW',
         },
         onFailure: 'skip',
-        _meta: { confirmationGated: true, label: '90-day no engagement' },
+        _meta: { confirmationGated: true, label: '90-day no engagement', intent: 'Find contacts with status NEW that have had no engagement in 90+ days' },
       },
     ],
   },
@@ -199,8 +196,8 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         action: 'search_permits',
         params: {
           geoId: { $ref: 'step_1.output.geoId' },
-          limit: 25,
-          skipEnrichment: true,
+          city: { $ref: 'step_1.output.city' },
+          permitType: '', // Supplied at runtime
         },
         onFailure: 'abort',
       },
@@ -208,16 +205,15 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         name: 'List contacts from sample',
         action: 'list_contacts',
         params: {
-          permitSearchId: { $ref: 'step_2.output.searchId' },
+          status: 'NEW',
+          city: { $ref: 'step_1.output.city' },
         },
         onFailure: 'skip',
       },
       {
         name: 'Calculate fill rates',
         action: 'get_metrics',
-        params: {
-          permitSearchId: { $ref: 'step_2.output.searchId' },
-        },
+        params: {},
         onFailure: 'skip',
         _meta: {
           summarize: true,
@@ -242,7 +238,9 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         name: 'Stop current enrollment',
         action: 'stop_enrollment',
         params: {
-          contactId: '',
+          campaignId: { $runtimeParam: 'campaignId' },
+          contactId: { $runtimeParam: 'contactId' },
+          reason: 'warm_lead_fast_track',
         },
         onFailure: 'skip', // May not be enrolled; that's fine
       },
@@ -250,8 +248,9 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         name: 'Create GHL opportunity',
         action: 'create_ghl_opportunity',
         params: {
-          contactId: { $ref: 'step_1.output.contactId' },
-          pipelineStage: 'warm-lead',
+          contactId: { $runtimeParam: 'contactId' },
+          name: 'Warm Lead',
+          stageId: '', // Falls back to settings default if empty
         },
         onFailure: 'skip',
       },
@@ -259,7 +258,7 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         name: 'Send Calendly SMS',
         action: 'send_sms',
         params: {
-          contactId: { $ref: 'step_1.output.contactId' },
+          contactId: { $runtimeParam: 'contactId' },
           message:
             "Hi {{firstName}}, I'd love to connect! Here's a link to book a quick call: {{calendlyLink}}",
         },
@@ -267,12 +266,20 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         maxRetries: 2,
       },
       {
-        name: 'Flag contact as hot',
+        name: 'Tag contact as hot lead',
+        action: 'add_contact_tag',
+        params: {
+          contactId: { $runtimeParam: 'contactId' },
+          tag: 'hot-lead',
+        },
+        onFailure: 'skip',
+      },
+      {
+        name: 'Update contact status',
         action: 'update_contact',
         params: {
-          contactId: { $ref: 'step_1.output.contactId' },
-          tags: ['hot-lead'],
-          status: 'hot',
+          contactId: { $runtimeParam: 'contactId' },
+          status: 'REPLIED',
         },
         onFailure: 'skip',
       },

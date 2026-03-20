@@ -28,9 +28,33 @@ import {
 
 // ==================== TYPES ====================
 
+/** Value is taken from `CreateWorkflowInput.runtimeParams` at execution (not `$ref`-chainable). */
+export type WorkflowRuntimeParamRef = { $runtimeParam: string };
+
+/** Reference to a previous step output (resolved at execution). */
+export type WorkflowParamRef = { $ref: string };
+
+/**
+ * Allowed shapes in `WorkflowPlanStep.params` (literals, $ref, $runtimeParam, nesting).
+ */
+export type WorkflowPlanParamValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | WorkflowParamRef
+  | WorkflowRuntimeParamRef
+  | WorkflowPlanParamValue[]
+  | { [key: string]: WorkflowPlanParamValue };
+
 export interface WorkflowPlanStep {
   name: string;
   action: string;
+  /**
+   * Step inputs. Values follow {@link WorkflowPlanParamValue} (literals, {@link WorkflowParamRef},
+   * {@link WorkflowRuntimeParamRef}, nesting). Stored as JSON; typed loosely for Prisma compatibility.
+   */
   params: Record<string, any>;
   onFailure?: 'skip' | 'abort' | 'retry';
   maxRetries?: number;
@@ -49,6 +73,7 @@ export interface CreateWorkflowInput {
   name: string;
   description?: string;
   steps: WorkflowPlanStep[];
+  runtimeParams?: Record<string, any>;
 }
 
 // ==================== ENGINE ====================
@@ -79,7 +104,7 @@ class WorkflowEngine {
         name: data.name,
         description: data.description || null,
         status: 'PENDING',
-        plan: data.steps as any,
+        plan: { steps: data.steps, runtimeParams: data.runtimeParams } as any,
         totalSteps: data.steps.length,
         completedSteps: 0,
         steps: {
@@ -152,6 +177,8 @@ class WorkflowEngine {
 
     workflowLogger.info({ name: workflow.name, totalSteps: workflow.totalSteps }, 'Workflow execution started');
 
+    const runtimeParams = (workflow.plan as any)?.runtimeParams || {};
+
     // Collect step outputs for $ref resolution
     const stepOutputs: Record<number, any> = {};
     let completedCount = 0;
@@ -196,7 +223,23 @@ class WorkflowEngine {
         }
 
         // Resolve input: merge params with $ref references from previous step outputs
-        const resolvedInput = this.resolveInput(step.params as Record<string, any>, stepOutputs);
+        const resolvedInput = this.resolveInput(
+          step.params as Record<string, any>,
+          stepOutputs,
+          runtimeParams
+        );
+
+        // Validate that $ref resolution didn't produce undefined for params that look required
+        const undefinedRefs = this.findUndefinedRefs(step.params as Record<string, any>, resolvedInput);
+        if (undefinedRefs.length > 0) {
+          const msg = `Unresolved $ref(s): ${undefinedRefs.join(', ')} resolved to undefined`;
+          workflowLogger.warn({ stepOrder: step.order, stepName: step.name, undefinedRefs }, msg);
+
+          const onFailure = step.onFailure || 'skip';
+          if (onFailure === 'abort') {
+            throw new Error(msg);
+          }
+        }
 
         // Mark step as RUNNING
         await prisma.workflowStep.update({
@@ -321,7 +364,10 @@ class WorkflowEngine {
               select: { retryCount: true },
             });
             const currentRetryCount = (currentStep?.retryCount || 0) + 1;
-            const planStep = (workflow.plan as any[])?.[step.order - 1] as WorkflowPlanStep | undefined;
+            const planJson = workflow.plan as any;
+            const planStep = (
+              Array.isArray(planJson) ? planJson[step.order - 1] : planJson?.steps?.[step.order - 1]
+            ) as WorkflowPlanStep | undefined;
             const maxStepRetries = planStep?.maxRetries ?? 3;
 
             if (currentRetryCount > maxStepRetries) {
@@ -564,6 +610,46 @@ class WorkflowEngine {
     logger.info({ workflowId }, 'Workflow resumed');
   }
 
+  /**
+   * Recover workflows stuck in RUNNING/PAUSED status after a server crash.
+   * Called once at server startup.
+   */
+  async recoverStuckWorkflows(): Promise<{ failed: number; resumed: number }> {
+    const stuckWorkflows = await prisma.workflow.findMany({
+      where: { status: { in: ['RUNNING', 'PAUSED'] } },
+      select: { id: true, name: true, status: true, startedAt: true },
+    });
+
+    if (stuckWorkflows.length === 0) return { failed: 0, resumed: 0 };
+
+    logger.warn(
+      { count: stuckWorkflows.length, ids: stuckWorkflows.map((w) => w.id) },
+      'Found stuck workflows after server restart — marking as FAILED'
+    );
+
+    let failed = 0;
+    for (const wf of stuckWorkflows) {
+      await prisma.workflow.update({
+        where: { id: wf.id },
+        data: {
+          status: 'FAILED',
+          error: `Server restarted while workflow was ${wf.status}. Marked FAILED during crash recovery.`,
+          completedAt: new Date(),
+        },
+      });
+
+      await prisma.workflowStep.updateMany({
+        where: { workflowId: wf.id, status: { in: ['RUNNING', 'PENDING'] } },
+        data: { status: 'SKIPPED', error: 'Skipped due to server restart crash recovery' },
+      });
+
+      failed++;
+    }
+
+    logger.info({ failed }, 'Workflow crash recovery complete');
+    return { failed, resumed: 0 };
+  }
+
   // ==================== PRIVATE HELPERS ====================
 
   /**
@@ -611,7 +697,8 @@ class WorkflowEngine {
    */
   private resolveInput(
     params: Record<string, any>,
-    stepOutputs: Record<number, any>
+    stepOutputs: Record<number, any>,
+    runtimeParams: Record<string, any>
   ): Record<string, any> {
     const resolved: Record<string, any> = {};
 
@@ -619,18 +706,41 @@ class WorkflowEngine {
       if (value && typeof value === 'object' && '$ref' in value) {
         // Object-style $ref: { "$ref": "step_1.output.contactIds" }
         resolved[key] = this.resolveRef(value.$ref, stepOutputs);
+      } else if (value && typeof value === 'object' && '$runtimeParam' in value) {
+        resolved[key] = runtimeParams[value.$runtimeParam] ?? value.$runtimeParam;
       } else if (typeof value === 'string' && value.startsWith('$ref:')) {
         // String-style $ref: "$ref:step_1.output.contactIds"
         resolved[key] = this.resolveRef(value.substring(5), stepOutputs);
       } else if (value && typeof value === 'object' && !Array.isArray(value)) {
         // Recurse into nested objects
-        resolved[key] = this.resolveInput(value, stepOutputs);
+        resolved[key] = this.resolveInput(value, stepOutputs, runtimeParams);
       } else {
         resolved[key] = value;
       }
     }
 
     return resolved;
+  }
+
+  /**
+   * Find params whose original value was a $ref but resolved to undefined.
+   */
+  private findUndefinedRefs(
+    originalParams: Record<string, any>,
+    resolvedParams: Record<string, any>
+  ): string[] {
+    const result: string[] = [];
+    for (const [key, value] of Object.entries(originalParams)) {
+      const isRef =
+        (value && typeof value === 'object' && '$ref' in value) ||
+        (typeof value === 'string' && value.startsWith('$ref:'));
+
+      if (isRef && resolvedParams[key] === undefined) {
+        const refPath = typeof value === 'string' ? value : value.$ref;
+        result.push(`${key} (${refPath})`);
+      }
+    }
+    return result;
   }
 
   /**

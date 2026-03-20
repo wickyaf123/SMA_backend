@@ -8,6 +8,7 @@ import { realtimeEmitter } from '../realtime/event-emitter.service';
 import { emitJobToConversation, WSEventType } from '../../config/websocket';
 import { logger } from '../../utils/logger';
 import type { ClayEnrichPayload } from '../../integrations/clay/types';
+import { lookupGeoId } from '../../data/geo-ids';
 
 export interface PermitPipelineParams {
   permitType: string;
@@ -59,9 +60,19 @@ export class PermitPipelineService {
       });
     }
 
-    const result = await shovelsScraperService.scrapeByPermitTypeAndGeo(
-      params.permitType, params.geoId, params.city, dateRangeDays, 100, true
-    );
+    // Prefer scrapeByCity (multi-tier zip fallback) when we can resolve a state abbreviation
+    const geoEntry = lookupGeoId(params.city);
+    const stateAbbr = geoEntry && !Array.isArray(geoEntry) ? geoEntry.stateAbbr
+      : Array.isArray(geoEntry) && geoEntry.length > 0 ? geoEntry[0].stateAbbr
+      : null;
+
+    const result = stateAbbr
+      ? await shovelsScraperService.scrapeByCity(
+          params.permitType, params.city, stateAbbr, dateRangeDays, 100, true
+        )
+      : await shovelsScraperService.scrapeByPermitTypeAndGeo(
+          params.permitType, params.geoId, params.city, dateRangeDays, 100, true
+        );
 
     // If the scraper returned errors and no results, mark as failed
     if (result.totalScraped === 0 && result.errors.length > 0) {
@@ -100,7 +111,7 @@ export class PermitPipelineService {
         source: 'shovels',
         permitType: params.permitType,
         permitCity: params.city,
-        createdAt: { gte: new Date(Date.now() - 120000) },
+        createdAt: { gte: new Date(Date.now() - config.defaults.contactFreshnessWindowMs) },
       },
       data: { permitSearchId: search.id },
     });
@@ -341,24 +352,35 @@ export class PermitPipelineService {
 
     for (const contact of incompleteContacts) {
       const tags = new Set(contact.tags);
-      if (!contact.email && contact.phone) {
-        tags.add('no_email_sms_fallback');
-      } else if (!contact.email && !contact.phone) {
-        tags.add('no_contact_available');
+      if (!contact.email) {
+        tags.add('email_not_found');
+        if (contact.phone) {
+          tags.add('no_email_sms_fallback');
+        } else {
+          tags.add('no_contact_available');
+        }
       }
       if (tags.size !== contact.tags.length) {
         await prisma.contact.update({
           where: { id: contact.id },
           data: { tags: Array.from(tags) },
         });
+        await prisma.activityLog.create({
+          data: {
+            contactId: contact.id,
+            action: 'email_not_found',
+            description: 'All enrichment sources exhausted without finding an email address',
+          },
+        });
       }
     }
 
+    const emailNotFound = incompleteContacts.filter(c => !c.email).length;
     const withPhone = incompleteContacts.filter(c => !c.email && c.phone).length;
     const noContact = incompleteContacts.filter(c => !c.email && !c.phone).length;
-    if (withPhone > 0 || noContact > 0) {
+    if (emailNotFound > 0) {
       logger.info(
-        { permitSearchId, smsFallback: withPhone, noContact },
+        { permitSearchId, emailNotFound, smsFallback: withPhone, noContact },
         'Fallback tags applied to incomplete contacts'
       );
     }

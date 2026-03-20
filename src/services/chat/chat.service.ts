@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '../../config/database';
 import { config } from '../../config/index';
 import { logger } from '../../utils/logger';
+import { NotFoundError } from '../../utils/errors';
 import { retryWithBackoff } from '../../utils/retry';
 import { toolDefinitions, executeTool } from './tools';
 import { JERRY_SYSTEM_PROMPT } from './system-prompt';
@@ -26,7 +27,9 @@ export class ChatService {
 
   async createConversation(title?: string): Promise<any> {
     const conversation = await prisma.conversation.create({
-      data: { title: title || 'New Chat' },
+      data: {
+        title: title || 'New Chat',
+      },
     });
     logger.info({ conversationId: conversation.id }, 'Created new conversation');
     return conversation;
@@ -55,12 +58,17 @@ export class ChatService {
       },
     });
     if (!conversation) {
-      throw new Error('Conversation not found');
+      throw new NotFoundError('Conversation not found');
     }
     return conversation;
   }
 
   async deleteConversation(id: string): Promise<void> {
+    const existing = await prisma.conversation.findUnique({ where: { id } });
+    if (!existing) {
+      logger.warn({ conversationId: id }, 'Conversation not found for deletion, skipping');
+      return;
+    }
     await prisma.conversation.delete({ where: { id } });
     logger.info({ conversationId: id }, 'Deleted conversation');
   }

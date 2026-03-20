@@ -7,46 +7,20 @@ import { Router, Request, Response } from 'express';
 import { getBasicHealth, getSystemHealth, getExtendedHealth, getVersion } from '../controllers/health.controller';
 import { emailNotificationService } from '../services/notification/email-notification.service';
 import { logger } from '../utils/logger';
-import { authenticateApiKey } from '../middleware/auth';
 
 const router = Router();
 
-/**
- * GET /health
- * Basic health check (public)
- */
 router.get('/health', getBasicHealth);
 
-/**
- * GET /api/v1/health
- * Detailed system health (protected)
- */
-router.get('/api/v1/health', authenticateApiKey, getSystemHealth);
+router.get('/api/v1/health', getSystemHealth);
 
-/**
- * GET /api/v1/health/extended
- * Extended health check including external APIs (protected)
- */
-router.get('/api/v1/health/extended', authenticateApiKey, getExtendedHealth);
+router.get('/api/v1/health/extended', getExtendedHealth);
 
-/**
- * GET /api/v1/integrations/status
- * Dedicated integration status endpoint (alias for health/extended but focused on integrations)
- * Returns status of all external service connections
- */
-router.get('/api/v1/integrations/status', authenticateApiKey, getExtendedHealth);
+router.get('/api/v1/integrations/status', getExtendedHealth);
 
-/**
- * GET /api/v1/version
- * API version info (protected)
- */
-router.get('/api/v1/version', authenticateApiKey, getVersion);
+router.get('/api/v1/version', getVersion);
 
-/**
- * POST /api/v1/test-notification
- * Test email notification system (protected)
- */
-router.post('/api/v1/test-notification', authenticateApiKey, async (req: Request, res: Response) => {
+router.post('/api/v1/test-notification', async (req: Request, res: Response) => {
   try {
     logger.info('Testing email notification system');
     

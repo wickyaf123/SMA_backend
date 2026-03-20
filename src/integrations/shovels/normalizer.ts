@@ -138,7 +138,7 @@ export function normalizeContractor(
   const tags = extractTags(contractor);
   const primaryPermitType = derivePrimaryPermitType(contractor.tag_tally);
 
-  const rawPermitDate = mostRecentPermit?.start_date || mostRecentPermit?.file_date || mostRecentPermit?.first_seen_date || null;
+  const rawPermitDate = mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || mostRecentPermit?.first_seen_date || null;
 
   return {
     email: extractPrimaryEmail(contractor),
@@ -301,7 +301,7 @@ export function normalizeEmployee(
   const tags = extractTags(contractor);
   const primaryPermitType = derivePrimaryPermitType(contractor.tag_tally);
 
-  const rawPermitDate = mostRecentPermit?.start_date || mostRecentPermit?.file_date || mostRecentPermit?.first_seen_date || null;
+  const rawPermitDate = mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || mostRecentPermit?.first_seen_date || null;
 
   return {
     email,

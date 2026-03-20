@@ -49,7 +49,9 @@ export class PermitRoutingService {
 
     const smsFallbackEnabled = (settings as any)?.permitSmsFallbackEnabled ?? true;
     const ghlWorkflowId = (settings as any)?.permitGhlWorkflowId;
+    const smsFallbackDelayDays = (settings as any)?.smsFallbackDelayDays ?? 5;
 
+    // SMS fallback for contacts with no email but have phone (immediate)
     if (smsFallbackEnabled && ghlWorkflowId && config.ghl.apiKey) {
       const incompleteWithPhone = await prisma.contact.findMany({
         where: {
@@ -74,6 +76,38 @@ export class PermitRoutingService {
         logger.info(
           { permitSearchId, smsFallbackCount: incompleteWithPhone.length },
           'SMS fallback routing complete for incomplete contacts'
+        );
+      }
+    }
+
+    // Email→SMS delay fallback: for contacts with BOTH email and phone,
+    // schedule SMS fallback after smsFallbackDelayDays if no reply
+    if (smsFallbackEnabled && ghlWorkflowId && config.ghl.apiKey && smsFallbackDelayDays > 0) {
+      const dualChannelContacts = await prisma.contact.findMany({
+        where: {
+          permitSearchId,
+          email: { not: null },
+          phone: { not: null },
+          clayEnrichmentStatus: { in: ['ENRICHED', 'SKIPPED'] },
+        },
+        select: { id: true },
+      });
+
+      if (dualChannelContacts.length > 0) {
+        // Tag contacts for delayed SMS follow-up so the cron job can pick them up
+        for (const contact of dualChannelContacts) {
+          await prisma.contact.update({
+            where: { id: contact.id },
+            data: {
+              tags: { push: 'sms_fallback_pending' },
+              lastContactedAt: new Date(), // Mark when email was sent
+            },
+          });
+        }
+
+        logger.info(
+          { permitSearchId, dualChannelCount: dualChannelContacts.length, delayDays: smsFallbackDelayDays },
+          `Tagged ${dualChannelContacts.length} contacts for SMS fallback after ${smsFallbackDelayDays} days`
         );
       }
     }

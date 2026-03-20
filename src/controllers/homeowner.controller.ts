@@ -3,6 +3,7 @@ import { prisma } from '../config/database';
 import { sendSuccess } from '../utils/response';
 import { logger } from '../utils/logger';
 import { realieEnrichmentService } from '../services/enrichment/realie.service';
+import { shovelsHomeownerEnrichmentService } from '../services/enrichment/shovels-homeowner.service';
 
 export class HomeownerController {
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -117,6 +118,17 @@ export class HomeownerController {
       const batchSize = parseInt(req.body.batchSize || '50', 10);
       logger.info({ batchSize }, 'Manually triggering Realie enrichment');
       const result = await realieEnrichmentService.enrichPendingHomeowners(batchSize);
+      sendSuccess(res, result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async triggerShovelsEnrich(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const batchSize = parseInt(req.body.batchSize || '50', 10);
+      logger.info({ batchSize }, 'Manually triggering Shovels contact enrichment');
+      const result = await shovelsHomeownerEnrichmentService.enrichPendingHomeowners(batchSize);
       sendSuccess(res, result);
     } catch (error) {
       next(error);

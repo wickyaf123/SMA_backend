@@ -16,6 +16,9 @@ import { OutreachChannel } from '@prisma/client';
 import { campaignService } from '../campaign/campaign.service';
 import { emailNotificationService } from '../notification/email-notification.service';
 import { realtimeEmitter } from '../realtime/event-emitter.service';
+import { replyClassificationService } from './classification.service';
+import { ghlClient } from '../../integrations/ghl/client';
+import { settingsService } from '../settings/settings.service';
 
 export interface HandleReplyParams {
   contactId: string;
@@ -120,7 +123,13 @@ class UnifiedReplyHandlerService {
         stoppedCampaigns: stoppedCount,
       });
 
-      // 6. Send email notification (Day 6)
+      // 6. Classify reply with Claude Haiku (async, non-blocking)
+      this.classifyReplyAsync(reply.id);
+
+      // 7. Trigger GHL reply workflow if configured (async, non-blocking)
+      this.triggerGhlReplyWorkflow(contactId, channel);
+
+      // 8. Send email notification (Day 6)
       await this.sendReplyNotification(contact, reply, stoppedCount);
 
       return {
@@ -277,6 +286,47 @@ class UnifiedReplyHandlerService {
         count: item._count,
       })),
     };
+  }
+
+  /**
+   * Classify reply asynchronously (fire-and-forget)
+   */
+  private classifyReplyAsync(replyId: string): void {
+    replyClassificationService.classifyAndStoreReply(replyId).catch((error) => {
+      logger.warn({ replyId, error: error.message }, 'Reply classification failed (non-critical)');
+    });
+  }
+
+  /**
+   * Trigger GHL reply workflow based on channel (fire-and-forget)
+   */
+  private triggerGhlReplyWorkflow(contactId: string, channel: OutreachChannel): void {
+    (async () => {
+      try {
+        const contact = await prisma.contact.findUnique({
+          where: { id: contactId },
+          select: { ghlContactId: true },
+        });
+
+        if (!contact?.ghlContactId) return;
+
+        const settings = await settingsService.getSettings();
+        let workflowId: string | null = null;
+
+        if (channel === 'EMAIL' && settings.permitGhlEmailReplyWorkflowId) {
+          workflowId = settings.permitGhlEmailReplyWorkflowId;
+        } else if (channel === 'SMS' && settings.permitGhlSmsReplyWorkflowId) {
+          workflowId = settings.permitGhlSmsReplyWorkflowId;
+        }
+
+        if (workflowId) {
+          await ghlClient.addContactToWorkflow(contact.ghlContactId, workflowId);
+          logger.info({ contactId, channel, workflowId }, 'GHL reply workflow triggered');
+        }
+      } catch (error: any) {
+        logger.warn({ contactId, channel, error: error.message }, 'GHL reply workflow trigger failed (non-critical)');
+      }
+    })();
   }
 
   /**

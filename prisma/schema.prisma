@@ -8,6 +8,26 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model User {
+  id            String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  email         String    @unique
+  passwordHash  String
+  firstName     String?
+  lastName      String?
+  role          UserRole  @default(USER)
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime? @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@index([email])
+}
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
 model Company {
   id               String    @id @default(dbgenerated("(gen_random_uuid())::text"))
   name             String
@@ -539,6 +559,9 @@ model Settings {
   permitSmsFallbackEnabled       Boolean   @default(true)
   permitAutoRouteEnabled         Boolean   @default(false)
 
+  // SMS Fallback Delay
+  smsFallbackDelayDays    Int?      @default(5)
+
   // GHL Pipeline Settings
   ghlPipelineId      String?
   ghlDefaultStageId  String?
@@ -591,6 +614,10 @@ model Homeowner {
   permitFees          Float?
   permitJurisdiction  String?
 
+  // Shovels contact enrichment
+  shovelsContactEnriched   Boolean   @default(false)
+  shovelsContactEnrichedAt DateTime? @db.Timestamptz(6)
+
   // Realie enrichment
   realieEnriched      Boolean   @default(false)
   realieEnrichedAt    DateTime? @db.Timestamptz(6)
@@ -637,6 +664,7 @@ model Homeowner {
   @@index([geoId])
   @@index([status])
   @@index([realieEnriched])
+  @@index([shovelsContactEnriched])
   @@index([createdAt])
 }
 

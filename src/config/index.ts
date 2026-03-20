@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import path from 'path';
 import { z } from 'zod';
 import { logger } from '../utils/logger';
 
@@ -81,6 +82,9 @@ const envSchema = z.object({
   SLACK_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
   SLACK_BOT_TOKEN: z.string().optional().or(z.literal('')),
 
+  // JWT Secret (for user auth)
+  JWT_SECRET: z.string().optional(),
+
   // Sentry (Error Tracking)
   SENTRY_DSN: z.string().url().optional(),
 
@@ -92,6 +96,11 @@ const envSchema = z.object({
   // Business Hours
   BUSINESS_HOURS_START: z.string().default('9'),
   BUSINESS_HOURS_END: z.string().default('17'),
+
+  // Configurable defaults
+  DEFAULT_DATE_RANGE_DAYS: z.string().default('100'),
+  CONTACT_FRESHNESS_WINDOW_MS: z.string().default('120000'),
+  EXPORT_DIR: z.string().default('tmp/exports'),
 });
 
 /**
@@ -240,6 +249,12 @@ export const config = {
   businessHours: {
     start: parseInt(env.BUSINESS_HOURS_START, 10),
     end: parseInt(env.BUSINESS_HOURS_END, 10),
+  },
+
+  defaults: {
+    dateRangeDays: parseInt(env.DEFAULT_DATE_RANGE_DAYS, 10),
+    contactFreshnessWindowMs: parseInt(env.CONTACT_FRESHNESS_WINDOW_MS, 10),
+    exportDir: env.EXPORT_DIR.startsWith('/') ? env.EXPORT_DIR : path.join(process.cwd(), env.EXPORT_DIR),
   },
 } as const;
 

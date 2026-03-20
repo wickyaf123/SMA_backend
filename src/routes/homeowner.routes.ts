@@ -7,6 +7,7 @@ router.get('/', homeownerController.list.bind(homeownerController));
 router.get('/stats', homeownerController.stats.bind(homeownerController));
 router.get('/export', homeownerController.export.bind(homeownerController));
 router.post('/enrich', homeownerController.triggerRealieEnrich.bind(homeownerController));
+router.post('/enrich/shovels', homeownerController.triggerShovelsEnrich.bind(homeownerController));
 router.get('/:id', homeownerController.get.bind(homeownerController));
 router.delete('/:id', homeownerController.delete.bind(homeownerController));
 

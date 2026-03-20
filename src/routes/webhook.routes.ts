@@ -5,18 +5,14 @@ import { phantomBusterWebhookController } from '../controllers/webhook/phantombu
 import { ghlWebhookController } from '../controllers/webhook/ghl.controller';
 import { handleClayWebhook } from '../controllers/webhook/clay.controller';
 import { webhookLogController } from '../controllers/webhook-log.controller';
-import { authenticateApiKey } from '../middleware/auth';
 
 const router = Router();
 
 /**
  * Webhook Routes
  * 
- * These endpoints are PUBLIC (no authentication required) as they receive
- * callbacks from external services like Apollo, Instantly, PhantomBuster, and GoHighLevel.
- * 
- * Security Note: In production, implement webhook signature verification
- * where supported by the provider.
+ * These endpoints receive callbacks from external services like
+ * Apollo, Instantly, PhantomBuster, and GoHighLevel.
  */
 
 // Apollo webhooks
@@ -47,27 +43,20 @@ router.post(
 router.post('/clay', handleClayWebhook);
 
 /**
- * Webhook Logs (protected - requires authentication)
+ * Webhook Logs
  */
-
-// GET /webhooks/logs - Get webhook logs with pagination
 router.get(
   '/logs',
-  authenticateApiKey,
   webhookLogController.getLogs.bind(webhookLogController)
 );
 
-// GET /webhooks/logs/recent - Get recent webhook logs
 router.get(
   '/logs/recent',
-  authenticateApiKey,
   webhookLogController.getRecent.bind(webhookLogController)
 );
 
-// GET /webhooks/logs/stats - Get webhook statistics
 router.get(
   '/logs/stats',
-  authenticateApiKey,
   webhookLogController.getStats.bind(webhookLogController)
 );
 

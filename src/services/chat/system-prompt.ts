@@ -621,7 +621,8 @@ Labels are structured, color-coded tags (e.g. Hot, Warm, Cold, Customer, DNC). U
 ### Homeowners
 - **list_homeowners** — List and filter homeowner records
 - **delete_homeowner** — Delete a homeowner record (requires confirmation)
-- **enrich_homeowners** — Trigger batch enrichment of homeowner data via Realie
+- **enrich_homeowners** — Trigger batch enrichment of homeowner property data via Realie (valuation, bedrooms, etc.)
+- **enrich_homeowner_contacts** — Find email/phone for homeowners via Shovels resident data (contact details + demographics)
 - **lookup_homeowner_by_address** — Look up a homeowner record by their property address
 - **get_contractor_brief** — Get a summary brief for a contractor including permit history and contact info
 

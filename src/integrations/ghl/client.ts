@@ -27,20 +27,24 @@ import {
 } from './types';
 
 export class GoHighLevelClient {
-  private api: AxiosInstance;
+  private api: AxiosInstance | null = null;
   private locationId: string;
   private phoneNumber?: string;
+  private _isConfigured: boolean;
 
   constructor() {
-    if (!config.ghl.apiKey) {
-      throw new Error('GHL_API_KEY is not set in environment variables');
-    }
-    if (!config.ghl.locationId) {
-      throw new Error('GHL_LOCATION_ID is not set in environment variables');
-    }
-
-    this.locationId = config.ghl.locationId;
+    this.locationId = config.ghl.locationId || '';
     this.phoneNumber = config.ghl.phoneNumber;
+    this._isConfigured = !!(config.ghl.apiKey && config.ghl.locationId);
+
+    if (this._isConfigured) {
+      this.initClient();
+    } else {
+      logger.warn('GoHighLevel client not configured — GHL_API_KEY or GHL_LOCATION_ID missing. GHL features disabled.');
+    }
+  }
+
+  private initClient(): void {
     this.api = axios.create({
       baseURL: config.ghl.baseUrl,
       headers: {
@@ -73,6 +77,17 @@ export class GoHighLevelClient {
     );
   }
 
+  isConfigured(): boolean {
+    return this._isConfigured;
+  }
+
+  private ensureConfigured(): AxiosInstance {
+    if (!this._isConfigured || !this.api) {
+      throw new Error('GoHighLevel is not configured. Set GHL_API_KEY and GHL_LOCATION_ID environment variables.');
+    }
+    return this.api;
+  }
+
   // ==================== Contact Management ====================
 
   /**
@@ -81,6 +96,7 @@ export class GoHighLevelClient {
   async createContact(
     contactData: Omit<GHLContactCreateRequest, 'locationId'>
   ): Promise<GHLContact> {
+    const api = this.ensureConfigured();
     logger.debug({ contactData }, 'Creating GHL contact');
 
     const payload: GHLContactCreateRequest = {
@@ -88,7 +104,7 @@ export class GoHighLevelClient {
       locationId: this.locationId,
     };
 
-    const response = await this.api.post<GHLContactResponse>('/contacts', payload);
+    const response = await api.post<GHLContactResponse>('/contacts', payload);
     logger.info(
       { ghlContactId: response.data.contact.id },
       'GHL contact created successfully'
@@ -104,9 +120,10 @@ export class GoHighLevelClient {
     contactId: string,
     updates: Omit<Partial<GHLContactUpdateRequest>, 'id' | 'locationId'>
   ): Promise<GHLContact> {
+    const api = this.ensureConfigured();
     logger.debug({ contactId, updates }, 'Updating GHL contact');
 
-    const response = await this.api.put<GHLContactResponse>(
+    const response = await api.put<GHLContactResponse>(
       `/contacts/${contactId}`,
       updates
     );
@@ -119,10 +136,11 @@ export class GoHighLevelClient {
    * Get a contact by ID
    */
   async getContact(contactId: string): Promise<GHLContact | null> {
+    const api = this.ensureConfigured();
     logger.debug({ contactId }, 'Fetching GHL contact');
 
     try {
-      const response = await this.api.get<GHLContactResponse>(
+      const response = await api.get<GHLContactResponse>(
         `/contacts/${contactId}`
       );
       return response.data.contact;
@@ -141,6 +159,7 @@ export class GoHighLevelClient {
   async searchContacts(
     params: Omit<GHLContactSearchParams, 'locationId'>
   ): Promise<GHLContactSearchResponse> {
+    const api = this.ensureConfigured();
     logger.debug({ params }, 'Searching GHL contacts');
 
     const searchParams: GHLContactSearchParams = {
@@ -148,7 +167,7 @@ export class GoHighLevelClient {
       locationId: this.locationId,
     };
 
-    const response = await this.api.get<GHLContactSearchResponse>('/contacts', {
+    const response = await api.get<GHLContactSearchResponse>('/contacts', {
       params: searchParams,
     });
 
@@ -168,6 +187,7 @@ export class GoHighLevelClient {
     email?: string,
     phone?: string
   ): Promise<GHLContact | null> {
+    this.ensureConfigured();
     if (!email && !phone) {
       return null;
     }
@@ -196,8 +216,9 @@ export class GoHighLevelClient {
    * Delete a contact
    */
   async deleteContact(contactId: string): Promise<void> {
+    const api = this.ensureConfigured();
     logger.debug({ contactId }, 'Deleting GHL contact');
-    await this.api.delete(`/contacts/${contactId}`);
+    await api.delete(`/contacts/${contactId}`);
     logger.info({ contactId }, 'GHL contact deleted');
   }
 
@@ -210,6 +231,7 @@ export class GoHighLevelClient {
     contactId: string,
     type: 'SMS' | 'Email'
   ): Promise<GHLConversationResponse['conversation']> {
+    const api = this.ensureConfigured();
     logger.debug({ contactId, type }, 'Creating GHL conversation');
 
     const payload: GHLConversationCreateRequest = {
@@ -218,7 +240,7 @@ export class GoHighLevelClient {
       type,
     };
 
-    const response = await this.api.post<GHLConversationResponse>(
+    const response = await api.post<GHLConversationResponse>(
       '/conversations',
       payload
     );
@@ -235,8 +257,9 @@ export class GoHighLevelClient {
    * Get an existing conversation
    */
   async getConversation(conversationId: string) {
+    const api = this.ensureConfigured();
     logger.debug({ conversationId }, 'Fetching GHL conversation');
-    const response = await this.api.get<GHLConversationResponse>(
+    const response = await api.get<GHLConversationResponse>(
       `/conversations/${conversationId}`
     );
     return response.data.conversation;
@@ -248,6 +271,7 @@ export class GoHighLevelClient {
    * Send an SMS message
    */
   async sendSMS(contactId: string, message: string): Promise<GHLMessageResponse> {
+    const api = this.ensureConfigured();
     logger.debug(
       { contactId, messageLength: message.length },
       'Sending SMS via GHL'
@@ -260,7 +284,7 @@ export class GoHighLevelClient {
       message,
     };
 
-    const response = await this.api.post<GHLMessageResponse>(
+    const response = await api.post<GHLMessageResponse>(
       '/conversations/messages',
       payload
     );
@@ -280,6 +304,7 @@ export class GoHighLevelClient {
    * Send an email via GHL
    */
   async sendEmail(emailData: Omit<GHLEmailRequest, 'locationId'>): Promise<GHLEmailResponse> {
+    const api = this.ensureConfigured();
     logger.debug({ to: emailData.to, subject: emailData.subject }, 'Sending email via GHL');
 
     // Normalize 'to' field to array format
@@ -291,7 +316,7 @@ export class GoHighLevelClient {
       locationId: this.locationId,
     };
 
-    const response = await this.api.post<GHLEmailResponse>('/emails', payload);
+    const response = await api.post<GHLEmailResponse>('/emails', payload);
 
     logger.info(
       { emailId: response.data.emailId, status: response.data.status },
@@ -307,9 +332,10 @@ export class GoHighLevelClient {
    * Get all phone numbers for this location
    */
   async getPhoneNumbers(): Promise<GHLPhoneNumbersResponse> {
+    const api = this.ensureConfigured();
     logger.debug({ locationId: this.locationId }, 'Fetching GHL phone numbers');
 
-    const response = await this.api.get<GHLPhoneNumbersResponse>(
+    const response = await api.get<GHLPhoneNumbersResponse>(
       `/locations/${this.locationId}/phoneNumbers`
     );
 
@@ -325,6 +351,7 @@ export class GoHighLevelClient {
    * Get the primary SMS-capable phone number
    */
   async getPrimarySMSNumber(): Promise<string | null> {
+    this.ensureConfigured();
     const { phoneNumbers } = await this.getPhoneNumbers();
     const smsNumber = phoneNumbers.find(
       (num) => num.capabilities.SMS && num.status === 'active'
@@ -357,6 +384,7 @@ export class GoHighLevelClient {
     contactId: string,
     body: string
   ): Promise<GHLNoteResponse['note']> {
+    const api = this.ensureConfigured();
     logger.debug({ contactId, noteLength: body.length }, 'Adding note to GHL contact');
 
     // GHL v2 API format for notes
@@ -366,7 +394,7 @@ export class GoHighLevelClient {
     };
 
     try {
-      const response = await this.api.post<GHLNoteResponse>(
+      const response = await api.post<GHLNoteResponse>(
         `/contacts/${contactId}/notes`,
         payload
       );
@@ -399,10 +427,11 @@ export class GoHighLevelClient {
    * Alternative way to mark replies when notes API fails
    */
   async addContactTags(contactId: string, tags: string[]): Promise<GHLContact> {
+    const api = this.ensureConfigured();
     logger.debug({ contactId, tags }, 'Adding tags to GHL contact');
 
     try {
-      const response = await this.api.post<GHLContactResponse>(
+      const response = await api.post<GHLContactResponse>(
         `/contacts/${contactId}/tags`,
         { tags }
       );
@@ -425,10 +454,11 @@ export class GoHighLevelClient {
    * GHL API v2: POST /contacts/{contactId}/workflow/{workflowId}
    */
   async addContactToWorkflow(contactId: string, workflowId: string): Promise<void> {
+    const api = this.ensureConfigured();
     logger.debug({ contactId, workflowId }, 'Adding contact to GHL workflow');
 
     try {
-      await this.api.post(`/contacts/${contactId}/workflow/${workflowId}`);
+      await api.post(`/contacts/${contactId}/workflow/${workflowId}`);
       logger.info({ contactId, workflowId }, 'Contact added to GHL workflow');
     } catch (error: any) {
       logger.error(
@@ -446,6 +476,7 @@ export class GoHighLevelClient {
    * GHL API v2: POST /opportunities/
    */
   async createOpportunity(data: CreateOpportunityPayload): Promise<GHLOpportunity> {
+    const api = this.ensureConfigured();
     logger.debug({ data }, 'Creating GHL opportunity');
 
     const payload = {
@@ -459,7 +490,7 @@ export class GoHighLevelClient {
     };
 
     try {
-      const response = await this.api.post<GHLOpportunityResponse>(
+      const response = await api.post<GHLOpportunityResponse>(
         '/opportunities/',
         payload
       );
@@ -492,11 +523,12 @@ export class GoHighLevelClient {
    * Then: GET /conversations/{conversationId}/messages
    */
   async getConversationMessages(ghlContactId: string): Promise<any[]> {
+    const api = this.ensureConfigured();
     logger.debug({ ghlContactId }, 'Fetching GHL conversation messages');
 
     try {
       // First, find conversations for this contact
-      const searchResponse = await this.api.get('/conversations/search', {
+      const searchResponse = await api.get('/conversations/search', {
         params: {
           locationId: this.locationId,
           contactId: ghlContactId,
@@ -512,7 +544,7 @@ export class GoHighLevelClient {
 
       // Get messages from the first (most recent) conversation
       const conversationId = conversations[0].id;
-      const messagesResponse = await this.api.get(`/conversations/${conversationId}/messages`);
+      const messagesResponse = await api.get(`/conversations/${conversationId}/messages`);
 
       // Handle different possible response structures from GHL API
       let messages: any[] = [];
@@ -523,11 +555,11 @@ export class GoHighLevelClient {
       } else if (messagesResponse.data?.messages?.messages && Array.isArray(messagesResponse.data.messages.messages)) {
         messages = messagesResponse.data.messages.messages;
       }
-      
+
       logger.debug(
-        { 
-          ghlContactId, 
-          conversationId, 
+        {
+          ghlContactId,
+          conversationId,
           messageCount: messages.length,
           responseType: typeof messagesResponse.data,
           responseKeys: messagesResponse.data ? Object.keys(messagesResponse.data) : [],
@@ -560,5 +592,3 @@ export class GoHighLevelClient {
 
 // Export singleton instance
 export const ghlClient = new GoHighLevelClient();
-
-

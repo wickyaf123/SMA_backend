@@ -17,7 +17,6 @@ import permitRoutes from './permit.routes';
 import homeownerRoutes from './homeowner.routes';
 import connectionRoutes from './connection.routes';
 import chatRoutes from './chat.routes';
-import { authenticateApiKey } from '../middleware/auth';
 
 const router = Router();
 
@@ -26,61 +25,57 @@ const router = Router();
  * All routes under /api/v1
  */
 
-// Health and system routes (public)
+// Health and system routes
 router.use(healthRoutes);
 
-// Webhooks (public - no auth, validated by provider signatures)
-// Note: /webhooks/logs requires auth (handled inside webhook.routes.ts)
+// Webhooks (validated by provider signatures)
 router.use('/api/v1/webhooks', webhookRoutes);
 
-// Phase 2: Lead Ingestion & Contact Management (protected)
-router.use('/contacts', authenticateApiKey, contactRoutes);
-router.use('/companies', authenticateApiKey, companyRoutes);
+// Lead Ingestion & Contact Management
+router.use('/api/v1/contacts', contactRoutes);
+router.use('/api/v1/companies', companyRoutes);
 
-// Phase 3/4: Campaign Management & Outreach (protected)
-router.use('/campaigns', authenticateApiKey, campaignRoutes);
+// Campaign Management & Outreach
+router.use('/api/v1/campaigns', campaignRoutes);
 
-// Phase 3.5: GoHighLevel Integration (protected)
-router.use('/ghl', authenticateApiKey, ghlRoutes);
+// GoHighLevel Integration
+router.use('/api/v1/ghl', ghlRoutes);
 
-// Phase 3.5 Day 7: Settings Management (protected)
-router.use('/api/v1/settings', authenticateApiKey, settingsRoutes);
+// Settings Management
+router.use('/api/v1/settings', settingsRoutes);
 
-// Phase 3.5 Day 8: Jobs Management (protected)
-router.use('/api/v1/jobs', authenticateApiKey, jobsRoutes);
+// Jobs Management
+router.use('/api/v1/jobs', jobsRoutes);
 
-// Activity Logs (protected)
-router.use('/activity', authenticateApiKey, activityRoutes);
+// Activity Logs
+router.use('/api/v1/activity', activityRoutes);
 
-// Message Templates (protected)
-router.use('/templates', authenticateApiKey, templateRoutes);
+// Message Templates
+router.use('/api/v1/templates', templateRoutes);
 
-// Metrics & Analytics (protected)
-router.use('/api/v1/metrics', authenticateApiKey, metricsRoutes);
+// Metrics & Analytics
+router.use('/api/v1/metrics', metricsRoutes);
 
-// Contractor Lead Generation (protected)
-router.use('/api/v1/contractors', authenticateApiKey, contractorRoutes);
+// Contractor Lead Generation
+router.use('/api/v1/contractors', contractorRoutes);
 
-// Scraper Services (protected)
-router.use('/api/v1/scraper', authenticateApiKey, scraperRoutes);
+// Scraper Services
+router.use('/api/v1/scraper', scraperRoutes);
 
-// Queue Management (protected)
-router.use('/api/v1/queues', authenticateApiKey, queueRoutes);
+// Queue Management
+router.use('/api/v1/queues', queueRoutes);
 
-// Permit Intelligence (protected)
-router.use('/api/v1/permits', authenticateApiKey, permitRoutes);
+// Permit Intelligence
+router.use('/api/v1/permits', permitRoutes);
 
-// Homeowner Data (protected)
-router.use('/api/v1/homeowners', authenticateApiKey, homeownerRoutes);
+// Homeowner Data
+router.use('/api/v1/homeowners', homeownerRoutes);
 
-// Contractor-Homeowner Connections (protected)
-router.use('/api/v1/connections', authenticateApiKey, connectionRoutes);
+// Contractor-Homeowner Connections
+router.use('/api/v1/connections', connectionRoutes);
 
-// Chat / Jerry AI (protected)
-router.use('/api/v1/chat', authenticateApiKey, chatRoutes);
-
-// Additional routes will be added in future phases:
-// router.use('/dashboard', dashboardRoutes);     // Phase 6
+// Chat / Jerry AI
+router.use('/api/v1/chat', chatRoutes);
 
 export default router;
 

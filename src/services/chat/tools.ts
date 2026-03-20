@@ -13,14 +13,24 @@ import { settingsService } from '../settings/settings.service';
 import { jobLogService } from '../job-log.service';
 import { getScheduler } from '../../jobs/scheduler';
 import { realieEnrichmentService } from '../enrichment/realie.service';
+import { shovelsHomeownerEnrichmentService } from '../enrichment/shovels-homeowner.service';
 import { redis } from '../../config/redis';
 
 import { workflowEngine } from '../workflow/workflow.engine';
 import { permitPipelineService } from '../permit/permit-pipeline.service';
+import { shovelsScraperService } from '../scraper/shovels.service';
 import { lookupGeoId } from '../../data/geo-ids';
 import { emitJobToConversation, WSEventType } from '../../config/websocket';
+import { realtimeEmitter } from '../realtime/event-emitter.service';
 import { ghlClient } from '../../integrations/ghl/client';
 import { getAllPresets, getPresetById } from '../workflow/workflow-presets';
+import { config } from '../../config';
+import { validateToolInput } from './tool-schemas';
+
+// Ensure export directory exists on startup
+if (!fs.existsSync(config.defaults.exportDir)) {
+  fs.mkdirSync(config.defaults.exportDir, { recursive: true });
+}
 
 export interface ToolDefinition {
   name: string;
@@ -110,6 +120,22 @@ export const toolDefinitions: ToolDefinition[] = [
           type: 'boolean',
           description: 'Filter by whether contact has replied',
         },
+        hasEmail: {
+          type: 'boolean',
+          description: 'Filter by whether contact has an email address',
+        },
+        hasPhone: {
+          type: 'boolean',
+          description: 'Filter by whether contact has a phone number',
+        },
+        emailValidationStatus: {
+          type: 'string',
+          description: 'Filter by email validation status (PENDING, VALID, INVALID, CATCH_ALL, UNKNOWN, DISPOSABLE)',
+        },
+        phoneValidationStatus: {
+          type: 'string',
+          description: 'Filter by phone validation status (PENDING, VALID_MOBILE, VALID_LANDLINE, INVALID, UNKNOWN)',
+        },
         page: { type: 'number', description: 'Page number (default 1)' },
         limit: {
           type: 'number',
@@ -155,13 +181,12 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'get_campaign_analytics',
     description:
-      'Get analytics for a specific campaign including enrollment count, reply rate, etc.',
+      'Get analytics for campaigns. If campaignId is provided, returns stats for that campaign. If omitted, returns aggregate stats across all campaigns.',
     input_schema: {
       type: 'object',
       properties: {
-        campaignId: { type: 'string', description: 'The campaign ID' },
+        campaignId: { type: 'string', description: 'The campaign ID (optional - omit for aggregate stats)' },
       },
-      required: ['campaignId'],
     },
   },
   {
@@ -757,6 +782,20 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'enrich_homeowner_contacts',
+    description:
+      'Find email and phone for homeowners via Shovels resident data. Looks up residents at the homeowner\'s permit address and matches by name to populate contact details and demographics.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        batchSize: {
+          type: 'number',
+          description: 'Number of homeowners to enrich in this batch (default 50)',
+        },
+      },
+    },
+  },
+  {
     name: 'list_connections',
     description:
       'List contractor-homeowner connections (links between contacts and homeowners via permits).',
@@ -1104,6 +1143,11 @@ export async function executeTool(
   logger.info(`Executing tool: ${name}`, { input });
 
   try {
+    // Validate input against Zod schema
+    const validatedInput = validateToolInput(name, input);
+    // Use validatedInput for all operations below
+    input = validatedInput;
+
     switch (name) {
       // ==================== EXISTING TOOLS ====================
 
@@ -1111,28 +1155,41 @@ export async function executeTool(
         const startDate = input.startDate || new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString().split('T')[0];
         const endDate = input.endDate || new Date().toISOString().split('T')[0];
 
-        // Auto-resolve geoId from city name (defense in depth)
-        let resolvedGeoId = input.geoId;
-        const geoResult = lookupGeoId(input.city);
+        // Parse city and state from input (supports "Austin, TX" or separate fields)
+        let cityName = input.city || '';
+        let stateAbbr = '';
+        const geoResult = lookupGeoId(cityName);
+        let resolvedGeoId = input.geoId || '';
+
         if (geoResult && !Array.isArray(geoResult)) {
           resolvedGeoId = geoResult.geoId;
+          stateAbbr = geoResult.stateAbbr;
         } else if (Array.isArray(geoResult) && geoResult.length > 0) {
           resolvedGeoId = geoResult[0].geoId;
+          stateAbbr = geoResult[0].stateAbbr;
         }
 
-        if (!resolvedGeoId) {
-          return {
-            success: false,
-            error: `Could not resolve a FIPS geoId for "${input.city}". Please ask the user which county this city is in, then call lookup_geo_id with the county name.`,
-          };
+        // Extract state from "City, ST" format if not resolved
+        if (!stateAbbr && cityName.includes(',')) {
+          const parts = cityName.split(',').map(s => s.trim());
+          cityName = parts[0];
+          stateAbbr = parts[1]?.toUpperCase() || '';
         }
+
+        if (!cityName) {
+          return { success: false, error: 'city is required for permit search' };
+        }
+
+        const dateRangeDays = Math.ceil(
+          (new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000
+        );
 
         // Create the record first so we can return the ID immediately
         const search = await prisma.permitSearch.create({
           data: {
             permitType: input.permitType,
-            city: input.city,
-            geoId: resolvedGeoId,
+            city: cityName,
+            geoId: resolvedGeoId || `${cityName.toLowerCase().replace(/\s+/g, '-')}-${stateAbbr.toLowerCase()}`,
             startDate: new Date(startDate),
             endDate: new Date(endDate),
             status: 'PENDING',
@@ -1140,16 +1197,125 @@ export async function executeTool(
           },
         });
 
-        // Kick off the pipeline in the background using the existing record
-        permitPipelineService.startSearch({
-          permitType: input.permitType,
-          city: input.city,
-          geoId: resolvedGeoId,
-          startDate,
-          endDate,
-          conversationId: context?.conversationId,
-        }, search.id).catch(async (err) => {
-          logger.error({ err: err.message, searchId: search.id }, 'Permit pipeline failed');
+        // Use scrapeByCity for multi-tier fallback (slug → zip expansion → FIPS)
+        const runSearch = async () => {
+          await prisma.permitSearch.update({
+            where: { id: search.id },
+            data: { status: 'SEARCHING' },
+          });
+
+          realtimeEmitter.emitJobEvent({
+            jobId: search.id,
+            jobType: 'permit:search',
+            status: 'started',
+          });
+
+          if (search.conversationId) {
+            emitJobToConversation(search.conversationId, WSEventType.JOB_STARTED, {
+              jobId: search.id,
+              jobType: 'permit:search',
+              status: 'started',
+              result: { permitType: input.permitType, city: cityName },
+            });
+          }
+
+          let result;
+          if (stateAbbr) {
+            result = await shovelsScraperService.scrapeByCity(
+              input.permitType, cityName, stateAbbr,
+              dateRangeDays, 100, true
+            );
+          } else {
+            result = await shovelsScraperService.scrapeByPermitTypeAndGeo(
+              input.permitType, resolvedGeoId, cityName,
+              dateRangeDays, 100, true
+            );
+          }
+
+          if (result.totalScraped === 0) {
+            const baseMsg = result.errors.length > 0
+              ? `Search failed: ${result.errors.join('; ')}`
+              : `No ${input.permitType} contractors found in ${cityName}${stateAbbr ? ', ' + stateAbbr : ''} for the selected date range. Tried ${result.searchesRun} geo format(s).`;
+            const diagnosticMsg = result.diagnostics
+              ? `${baseMsg} | Diagnostics: ${result.diagnostics}`
+              : baseMsg;
+
+            await prisma.permitSearch.update({
+              where: { id: search.id },
+              data: {
+                status: result.errors.length > 0 ? 'FAILED' : 'COMPLETED',
+                totalFound: 0,
+              },
+            });
+
+            const eventType = result.errors.length > 0 ? WSEventType.JOB_FAILED : WSEventType.JOB_COMPLETED;
+            realtimeEmitter.emitJobEvent({
+              jobId: search.id,
+              jobType: 'permit:search',
+              status: result.errors.length > 0 ? 'failed' : 'completed',
+              result: { total: 0, message: diagnosticMsg, searchesRun: result.searchesRun },
+            });
+
+            if (search.conversationId) {
+              emitJobToConversation(search.conversationId, eventType, {
+                jobId: search.id,
+                jobType: 'permit:search',
+                status: result.errors.length > 0 ? 'failed' : 'completed',
+                result: { total: 0, message: diagnosticMsg, searchesRun: result.searchesRun },
+              });
+            }
+            return;
+          }
+
+          // Scraping done — link contacts, update status, then enrich (skip re-scrape)
+          await prisma.permitSearch.update({
+            where: { id: search.id },
+            data: { status: 'ENRICHING', totalFound: result.totalImported },
+          });
+
+          await prisma.contact.updateMany({
+            where: {
+              source: 'shovels',
+              permitType: input.permitType,
+              permitCity: cityName,
+              permitSearchId: null,
+              createdAt: { gte: new Date(Date.now() - 3600000) },
+            },
+            data: { permitSearchId: search.id },
+          });
+
+          // Try Clay enrichment (non-blocking)
+          permitPipelineService.sendToClayEnrichment(search.id).catch((err) => {
+            logger.warn({ err: err.message, searchId: search.id }, 'Clay enrichment skipped or failed');
+          });
+
+          // Mark as ready for review
+          await prisma.permitSearch.update({
+            where: { id: search.id },
+            data: { status: 'READY_FOR_REVIEW' },
+          });
+
+          realtimeEmitter.emitJobEvent({
+            jobId: search.id,
+            jobType: 'permit:search',
+            status: 'completed',
+            result: { total: result.totalImported, scraped: result.totalScraped, filtered: result.filtered },
+          });
+
+          if (search.conversationId) {
+            emitJobToConversation(search.conversationId, WSEventType.JOB_COMPLETED, {
+              jobId: search.id,
+              jobType: 'permit:search',
+              status: 'completed',
+              result: { total: result.totalImported, scraped: result.totalScraped, filtered: result.filtered },
+            });
+          }
+        };
+
+        try {
+          await runSearch();
+        } catch (err: any) {
+          logger.error({ err: err.message, searchId: search.id }, 'Permit search pipeline failed');
           await prisma.permitSearch.update({
             where: { id: search.id },
             data: { status: 'FAILED' },
@@ -1162,14 +1328,25 @@ export async function executeTool(
               error: err.message,
             });
           }
+          return {
+            success: false,
+            error: `Permit search failed: ${err.message}`,
+            data: { searchId: search.id },
+          };
+        }
+
+        const finalSearch = await prisma.permitSearch.findUnique({
+          where: { id: search.id },
+          select: { status: true, totalFound: true },
         });
 
         return {
           success: true,
           data: {
             searchId: search.id,
-            status: 'SEARCHING',
-            message: `Permit search started for ${input.permitType} permits in ${input.city}. The search is running in the background — you'll be notified when it completes.`,
+            status: finalSearch?.status || 'COMPLETED',
+            totalFound: finalSearch?.totalFound || 0,
+            message: `Permit search for ${input.permitType} permits in ${cityName}${stateAbbr ? ', ' + stateAbbr : ''} completed with ${finalSearch?.totalFound || 0} results.`,
           },
         };
       }
@@ -1223,6 +1400,12 @@ export async function executeTool(
         if (input.city) where.city = input.city;
         if (input.state) where.state = input.state;
         if (input.hasReplied !== undefined) where.hasReplied = input.hasReplied;
+        if (input.hasEmail === true) where.email = { not: null };
+        if (input.hasEmail === false) where.email = null;
+        if (input.hasPhone === true) where.phone = { not: null };
+        if (input.hasPhone === false) where.phone = null;
+        if (input.emailValidationStatus) where.emailValidationStatus = input.emailValidationStatus;
+        if (input.phoneValidationStatus) where.phoneValidationStatus = input.phoneValidationStatus;
 
         const [contacts, total] = await Promise.all([
           prisma.contact.findMany({
@@ -1288,37 +1471,74 @@ export async function executeTool(
       }
 
       case 'get_campaign_analytics': {
-        const campaign = await prisma.campaign.findUnique({
-          where: { id: input.campaignId },
-          include: {
-            _count: {
-              select: { enrollments: true },
+        if (input.campaignId) {
+          // Single campaign analytics
+          const campaign = await prisma.campaign.findUnique({
+            where: { id: input.campaignId },
+            include: {
+              _count: {
+                select: { enrollments: true },
+              },
             },
-          },
-        });
-        if (!campaign) {
+          });
+          if (!campaign) {
+            return {
+              success: false,
+              error: `Campaign not found with ID: ${input.campaignId}`,
+            };
+          }
+
+          const enrollmentStats = await prisma.campaignEnrollment.groupBy({
+            by: ['status'],
+            where: { campaignId: input.campaignId },
+            _count: { status: true },
+          });
+
           return {
-            success: false,
-            error: `Campaign not found with ID: ${input.campaignId}`,
+            success: true,
+            data: {
+              campaign,
+              enrollmentStats: enrollmentStats.map((s: any) => ({
+                status: s.status,
+                count: s._count.status,
+              })),
+            },
+          };
+        } else {
+          // Aggregate analytics across all campaigns
+          const campaigns = await prisma.campaign.findMany({
+            include: {
+              _count: { select: { enrollments: true } },
+            },
+          });
+
+          const enrollmentStats = await prisma.campaignEnrollment.groupBy({
+            by: ['status'],
+            _count: { status: true },
+          });
+
+          const totalEnrolled = campaigns.reduce((sum, c) => sum + c._count.enrollments, 0);
+
+          return {
+            success: true,
+            data: {
+              totalCampaigns: campaigns.length,
+              activeCampaigns: campaigns.filter(c => c.status === 'ACTIVE').length,
+              totalEnrolled,
+              campaigns: campaigns.map(c => ({
+                id: c.id,
+                name: c.name,
+                channel: c.channel,
+                status: c.status,
+                enrolled: c._count.enrollments,
+              })),
+              enrollmentStats: enrollmentStats.map((s: any) => ({
+                status: s.status,
+                count: s._count.status,
+              })),
+            },
           };
         }
-
-        const enrollmentStats = await prisma.campaignEnrollment.groupBy({
-          by: ['status'],
-          where: { campaignId: input.campaignId },
-          _count: { status: true },
-        });
-
-        return {
-          success: true,
-          data: {
-            campaign,
-            enrollmentStats: enrollmentStats.map((s: any) => ({
-              status: s.status,
-              count: s._count.status,
-            })),
-          },
-        };
       }
 
       case 'list_homeowners': {
@@ -1621,10 +1841,7 @@ export async function executeTool(
         const lineCount = csv.split('\n').length - 1; // subtract header
 
         // Write CSV to temp file for download
-        const exportDir = path.join(process.cwd(), 'tmp', 'exports');
-        if (!fs.existsSync(exportDir)) {
-          fs.mkdirSync(exportDir, { recursive: true });
-        }
+        const exportDir = config.defaults.exportDir;
         const filename = `${randomUUID()}.csv`;
         const filePath = path.join(exportDir, filename);
         fs.writeFileSync(filePath, csv);
@@ -1681,6 +1898,20 @@ export async function executeTool(
       }
 
       case 'send_sms': {
+        if (!ghlClient.isConfigured()) {
+          return { success: false, error: 'GoHighLevel is not configured. Set GHL_API_KEY and GHL_LOCATION_ID to enable SMS sending.' };
+        }
+        // Pre-validate: check contact has phone
+        const smsContact = await prisma.contact.findUnique({
+          where: { id: input.contactId },
+          select: { phone: true },
+        });
+        if (!smsContact) {
+          return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+        }
+        if (!smsContact.phone) {
+          return { success: false, error: `Contact ${input.contactId} has no phone number. Cannot send SMS.` };
+        }
         const smsResult = await smsOutreachService.sendSMS({
           contactId: input.contactId,
           message: input.message,
@@ -1719,6 +1950,17 @@ export async function executeTool(
       // ==================== CAMPAIGN TOOLS ====================
 
       case 'enroll_contacts': {
+        // Pre-validate: check campaign exists and is active
+        const campaign = await prisma.campaign.findUnique({
+          where: { id: input.campaignId },
+          select: { status: true, name: true },
+        });
+        if (!campaign) {
+          return { success: false, error: `Campaign not found with ID: ${input.campaignId}` };
+        }
+        if (campaign.status === 'DRAFT' || campaign.status === 'COMPLETED') {
+          return { success: false, error: `Cannot enroll contacts in campaign "${campaign.name}" — status is ${campaign.status}. Campaign must be ACTIVE or SCHEDULED.` };
+        }
         const enrollResult = await campaignService.enrollContacts(
           input.campaignId,
           input.contactIds
@@ -1736,18 +1978,25 @@ export async function executeTool(
       }
 
       case 'stop_enrollment': {
-        await campaignService.stopEnrollment(
-          input.campaignId,
-          input.contactId,
-          input.reason || 'manual_stop'
-        );
+        if (!input.campaignId || !input.contactId) {
+          return { success: false, error: 'Both campaignId and contactId are required to stop enrollment.' };
+        }
+        try {
+          await campaignService.stopEnrollment(
+            input.campaignId,
+            input.contactId,
+            input.reason || 'manual_stop'
+          );
 
-        return {
-          success: true,
-          data: {
-            message: `Enrollment stopped for contact ${input.contactId} in campaign ${input.campaignId}.`,
-          },
-        };
+          return {
+            success: true,
+            data: {
+              message: `Enrollment stopped for contact ${input.contactId} in campaign ${input.campaignId}.`,
+            },
+          };
+        } catch (err: any) {
+          return { success: false, error: `Failed to stop enrollment: ${err.message}` };
+        }
       }
 
       case 'get_campaign_enrollments': {
@@ -1968,29 +2217,33 @@ export async function executeTool(
           return { success: false, error: 'Scheduler is not initialized. The system may still be starting up.' };
         }
 
-        const jobResult = await scheduler.triggerJob(
-          input.jobName as any,
-          { useQueue: input.useQueue || false }
-        );
+        try {
+          const jobResult = await scheduler.triggerJob(
+            input.jobName as any,
+            { useQueue: input.useQueue || false }
+          );
 
-        if (input.useQueue && jobResult.queued) {
+          if (input.useQueue && jobResult.queued) {
+            return {
+              success: true,
+              data: {
+                queued: true,
+                jobId: jobResult.jobId,
+                message: `Job "${input.jobName}" added to queue. It will run in the background.`,
+              },
+            };
+          }
+
           return {
             success: true,
             data: {
-              queued: true,
-              jobId: jobResult.jobId,
-              message: `Job "${input.jobName}" added to queue. It will run in the background.`,
+              result: jobResult,
+              message: `Job "${input.jobName}" executed successfully.`,
             },
           };
+        } catch (err: any) {
+          return { success: false, error: `Failed to trigger job "${input.jobName}": ${err.message}` };
         }
-
-        return {
-          success: true,
-          data: {
-            result: jobResult,
-            message: `Job "${input.jobName}" executed successfully.`,
-          },
-        };
       }
 
       case 'emergency_stop': {
@@ -2066,6 +2319,23 @@ export async function executeTool(
             notFound: enrichResult.notFound,
             errors: enrichResult.errors,
             message: `Enriched ${enrichResult.enriched} of ${enrichResult.total} homeowners. ${enrichResult.notFound} not found in Realie, ${enrichResult.errors} errors.`,
+          },
+        };
+      }
+
+      case 'enrich_homeowner_contacts': {
+        const contactBatchSize = input.batchSize || 50;
+        const contactEnrichResult = await shovelsHomeownerEnrichmentService.enrichPendingHomeowners(contactBatchSize);
+
+        return {
+          success: true,
+          data: {
+            total: contactEnrichResult.total,
+            enriched: contactEnrichResult.enriched,
+            notFound: contactEnrichResult.notFound,
+            noAddressId: contactEnrichResult.noAddressId,
+            errors: contactEnrichResult.errors,
+            message: `Contact enrichment complete: ${contactEnrichResult.enriched} of ${contactEnrichResult.total} homeowners got email/phone. ${contactEnrichResult.notFound} had no contact data in Shovels, ${contactEnrichResult.noAddressId} had no address ID, ${contactEnrichResult.errors} errors.`,
           },
         };
       }
@@ -2444,11 +2714,13 @@ export async function executeTool(
             data: {
               found: true,
               multiple: true,
+              city,
               message: `Multiple matches found for "${city}". Please confirm which one:`,
               matches: result.map(r => ({
                 geoId: r.geoId,
                 county: r.county,
                 state: r.state,
+                stateAbbr: r.stateAbbr,
               })),
             },
           };
@@ -2459,8 +2731,10 @@ export async function executeTool(
           data: {
             found: true,
             geoId: result.geoId,
+            city,
             county: result.county,
             state: result.state,
+            stateAbbr: result.stateAbbr,
           },
         };
       }
@@ -2542,8 +2816,8 @@ export async function executeTool(
           return { success: false, error: `Contact not found with ID: ${input.contactId}` };
         }
 
-        // Sync note to GHL if contact is linked
-        if (noteContact.ghlContactId) {
+        // Sync note to GHL if contact is linked and GHL is configured
+        if (noteContact.ghlContactId && ghlClient.isConfigured()) {
           try {
             await ghlClient.addContactNote(noteContact.ghlContactId, input.note);
           } catch (ghlErr: any) {
@@ -2873,6 +3147,9 @@ export async function executeTool(
       // ==================== GHL OPPORTUNITY TOOL (Jerry $900 Scope) ====================
 
       case 'create_ghl_opportunity': {
+        if (!ghlClient.isConfigured()) {
+          return { success: false, error: 'GoHighLevel is not configured. Set GHL_API_KEY and GHL_LOCATION_ID to enable opportunity creation.' };
+        }
         const oppContact = await prisma.contact.findUnique({
           where: { id: input.contactId },
           select: { id: true, ghlContactId: true, fullName: true },

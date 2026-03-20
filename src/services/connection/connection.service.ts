@@ -95,7 +95,7 @@ export class ConnectionService {
             homeownerId: homeowner.id,
             permitId,
             permitType: permit.type || permit.tags?.[0] || homeowner.permitType || null,
-            permitDate: permit.start_date || permit.file_date || null,
+            permitDate: permit.issue_date || permit.file_date || permit.start_date || null,
             permitJobValue: permit.job_value ?? null,
             permitDescription: permit.description || null,
             source: 'shovels',
@@ -126,7 +126,7 @@ export class ConnectionService {
     homeownerId: string,
     contractorShovelsId: string,
     permitId: string,
-    permitData: { type?: string | null; start_date?: string | null; file_date?: string | null; job_value?: number | null; description?: string | null; tags?: string[] | null }
+    permitData: { type?: string | null; issue_date?: string | null; start_date?: string | null; file_date?: string | null; job_value?: number | null; description?: string | null; tags?: string[] | null }
   ): Promise<boolean> {
     try {
       const contact = await prisma.contact.findFirst({
@@ -150,7 +150,7 @@ export class ConnectionService {
           homeownerId: homeownerId,
           permitId,
           permitType: permitData.type || permitData.tags?.[0] || null,
-          permitDate: permitData.start_date || permitData.file_date || null,
+          permitDate: permitData.issue_date || permitData.file_date || permitData.start_date || null,
           permitJobValue: permitData.job_value ?? null,
           permitDescription: permitData.description || null,
           source: 'shovels',
