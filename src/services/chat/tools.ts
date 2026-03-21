@@ -1171,7 +1171,7 @@ export async function executeTool(
 
         // Extract state from "City, ST" format if not resolved
         if (!stateAbbr && cityName.includes(',')) {
-          const parts = cityName.split(',').map(s => s.trim());
+          const parts = cityName.split(',').map((s: string) => s.trim());
           cityName = parts[0];
           stateAbbr = parts[1]?.toUpperCase() || '';
         }
