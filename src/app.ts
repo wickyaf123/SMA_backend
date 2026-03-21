@@ -17,10 +17,19 @@ export function createApp(): Express {
   // Security middleware
   app.use(helmet());
   
-  // CORS - restrict to frontend URL in production
+  const allowedOrigins = config.isProduction && process.env.FRONTEND_URL
+    ? process.env.FRONTEND_URL.split(',').map(u => u.trim())
+    : [];
+
   app.use(cors({
-    origin: config.isProduction 
-      ? process.env.FRONTEND_URL 
+    origin: config.isProduction
+      ? (origin, callback) => {
+          if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, origin || false);
+          } else {
+            callback(new Error(`Origin ${origin} not allowed by CORS`));
+          }
+        }
       : '*',
     credentials: true,
   }));
