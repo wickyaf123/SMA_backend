@@ -17,9 +17,22 @@ export function createApp(): Express {
   // Security middleware
   app.use(helmet());
   
-  const allowedOrigins = config.isProduction && process.env.FRONTEND_URL
-    ? process.env.FRONTEND_URL.split(',').map(u => u.trim())
-    : [];
+  const allowedOrigins: string[] = [];
+  if (config.isProduction && process.env.FRONTEND_URL) {
+    for (const raw of process.env.FRONTEND_URL.split(',')) {
+      const u = raw.trim();
+      if (!u) continue;
+      allowedOrigins.push(u);
+      // Auto-include www / non-www counterpart
+      const url = new URL(u);
+      if (url.hostname.startsWith('www.')) {
+        url.hostname = url.hostname.slice(4);
+      } else {
+        url.hostname = `www.${url.hostname}`;
+      }
+      allowedOrigins.push(url.origin);
+    }
+  }
 
   app.use(cors({
     origin: config.isProduction
@@ -27,7 +40,7 @@ export function createApp(): Express {
           if (!origin || allowedOrigins.includes(origin)) {
             callback(null, origin || false);
           } else {
-            callback(new Error(`Origin ${origin} not allowed by CORS`));
+            callback(null, false);
           }
         }
       : '*',
