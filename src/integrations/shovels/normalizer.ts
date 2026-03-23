@@ -1,5 +1,35 @@
 import type { ShovelsContractor, ShovelsEmployee, ShovelsPermit, ShovelsResident } from './types';
 
+const MAX_PERMIT_AGE_YEARS = 20;
+
+function validatePermitDate(dateStr: string | null): string | null {
+  if (!dateStr) return null;
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return null;
+
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    if (d > tomorrow) {
+      console.warn(`[shovels-normalizer] Rejecting future permit date: ${dateStr}`);
+      return null;
+    }
+
+    const cutoff = new Date(now);
+    cutoff.setFullYear(cutoff.getFullYear() - MAX_PERMIT_AGE_YEARS);
+    if (d < cutoff) {
+      console.warn(`[shovels-normalizer] Rejecting permit date older than ${MAX_PERMIT_AGE_YEARS} years: ${dateStr}`);
+      return null;
+    }
+
+    return dateStr;
+  } catch {
+    return null;
+  }
+}
+
 function computeDateFriendly(dateStr: string | null): string | null {
   if (!dateStr) return null;
   try {
@@ -138,7 +168,9 @@ export function normalizeContractor(
   const tags = extractTags(contractor);
   const primaryPermitType = derivePrimaryPermitType(contractor.tag_tally);
 
-  const rawPermitDate = mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || mostRecentPermit?.first_seen_date || null;
+  const rawPermitDate = validatePermitDate(
+    mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || mostRecentPermit?.first_seen_date || null
+  );
 
   return {
     email: extractPrimaryEmail(contractor),
@@ -301,7 +333,9 @@ export function normalizeEmployee(
   const tags = extractTags(contractor);
   const primaryPermitType = derivePrimaryPermitType(contractor.tag_tally);
 
-  const rawPermitDate = mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || mostRecentPermit?.first_seen_date || null;
+  const rawPermitDate = validatePermitDate(
+    mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || mostRecentPermit?.first_seen_date || null
+  );
 
   return {
     email,

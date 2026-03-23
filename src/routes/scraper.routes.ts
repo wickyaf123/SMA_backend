@@ -46,5 +46,11 @@ router.post(
   scraperController.batchImportAll.bind(scraperController)
 );
 
+// Shovels date field diagnostic
+router.get(
+  '/shovels/test-dates',
+  scraperController.testShovelsDateFields.bind(scraperController)
+);
+
 export default router;
 

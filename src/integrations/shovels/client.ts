@@ -84,7 +84,7 @@ export class ShovelsClient {
             file_date: permit.file_date,
             issue_date: permit.issue_date,
             first_seen_date: permit.first_seen_date,
-            resolvedPermitDate: permit.start_date || permit.file_date || permit.first_seen_date || null,
+            resolvedPermitDate: permit.issue_date || permit.file_date || permit.start_date || permit.first_seen_date || null,
           },
           'Shovels permit date fields (raw response diagnostic)'
         );

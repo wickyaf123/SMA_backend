@@ -72,7 +72,7 @@ export enum WSEventType {
 export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
   io = new SocketIOServer(httpServer, {
     cors: {
-      origin: config.isDevelopment ? '*' : process.env.FRONTEND_URL,
+      origin: config.isDevelopment ? '*' : (process.env.FRONTEND_URL?.split(',').map(u => u.trim()) || []),
       methods: ['GET', 'POST'],
       credentials: true,
     },

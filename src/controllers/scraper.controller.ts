@@ -5,6 +5,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { googleMapsScraperService } from '../services/scraper/google-maps.service';
+import { ShovelsClient } from '../integrations/shovels/client';
 import { logger } from '../utils/logger';
 import { successResponse, errorResponse } from '../utils/response';
 
@@ -199,6 +200,57 @@ export class ScraperController {
       res.status(202).json(successResponse(results, {
         message: 'Batch import for all industries completed',
       }));
+    } catch (error) {
+      next(error);
+    }
+  }
+  /**
+   * Test Shovels date fields (diagnostic)
+   * GET /api/v1/scraper/shovels/test-dates?geo_id=...&tags=...
+   */
+  public async testShovelsDateFields(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const { geo_id, tags } = req.query;
+
+      const now = new Date();
+      const sixMonthsAgo = new Date(now);
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+      const shovelsClient = new ShovelsClient();
+      const contractors = await shovelsClient.searchContractors({
+        geo_id: (geo_id as string) || 'us-az-scottsdale',
+        tags: (tags as string) || 'solar',
+        permit_from: sixMonthsAgo.toISOString().split('T')[0],
+        permit_to: now.toISOString().split('T')[0],
+        size: 5,
+      });
+
+      const results = await Promise.all(
+        contractors.slice(0, 5).map(async (c) => {
+          const permit = await shovelsClient.getMostRecentPermit(c.id);
+          return {
+            contractorId: c.id,
+            name: c.name,
+            permit: permit
+              ? {
+                  id: permit.id,
+                  issue_date: permit.issue_date,
+                  file_date: permit.file_date,
+                  start_date: permit.start_date,
+                  final_date: permit.final_date,
+                  first_seen_date: permit.first_seen_date,
+                  resolved: permit.issue_date || permit.file_date || permit.start_date || permit.first_seen_date || null,
+                }
+              : null,
+          };
+        })
+      );
+
+      res.json(successResponse({ contractors: results }));
     } catch (error) {
       next(error);
     }

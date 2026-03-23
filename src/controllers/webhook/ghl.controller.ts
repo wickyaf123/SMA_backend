@@ -8,7 +8,6 @@ import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { GHLInboundMessagePayload } from '../../integrations/ghl/types';
 import { unifiedReplyHandler } from '../../services/reply/unified-reply-handler.service';
-import { ghlClient } from '../../integrations/ghl/client';
 
 class GHLWebhookController {
   /**
@@ -110,29 +109,8 @@ class GHLWebhookController {
         'Unified reply handler processed GHL reply'
       );
 
-      // Enroll in the appropriate GHL workflow based on reply channel
-      if (payload.contactId) {
-        try {
-          const settings = await prisma.settings.findFirst();
-          const isSms = payload.message.type === 'SMS';
-          const workflowId = isSms
-            ? (settings as any)?.permitGhlSmsReplyWorkflowId
-            : (settings as any)?.permitGhlEmailReplyWorkflowId;
-
-          if (workflowId) {
-            await ghlClient.addContactToWorkflow(payload.contactId, workflowId);
-            logger.info(
-              { ghlContactId: payload.contactId, workflowId, channel: payload.message.type },
-              'Contact enrolled in reply GHL workflow'
-            );
-          }
-        } catch (wfError: any) {
-          logger.warn(
-            { ghlContactId: payload.contactId, error: wfError.message },
-            'Failed to enroll in reply workflow (non-critical)'
-          );
-        }
-      }
+      // GHL workflow enrollment is handled by unifiedReplyHandler.triggerGhlReplyWorkflow()
+      // (called within handleReply above) — no duplicate enrollment needed here.
 
       res.status(200).json({
         received: true,

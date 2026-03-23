@@ -1,6 +1,7 @@
 import { prisma } from '../../config/database';
 import { shovelsScraperService } from '../scraper/shovels.service';
 import { clayClient } from '../../integrations/clay/client';
+import { HunterEnrichmentService } from '../enrichment/hunter.service';
 import { permitSheetsService } from './sheets.service';
 import { permitRoutingService } from './routing.service';
 import { config } from '../../config';
@@ -220,6 +221,7 @@ export class PermitPipelineService {
     const search = await prisma.permitSearch.findUnique({ where: { id: permitSearchId } });
     if (!search || search.status === 'READY_FOR_REVIEW' || search.status === 'COMPLETED') return;
 
+    await this.sendToHunterEnrichment(permitSearchId);
     await this.tagFallbackContacts(permitSearchId);
 
     const [enriched, skipped, incomplete, raw] = await Promise.all([
@@ -344,6 +346,69 @@ export class PermitPipelineService {
     return result;
   }
 
+  private async sendToHunterEnrichment(permitSearchId: string): Promise<void> {
+    const contacts = await prisma.contact.findMany({
+      where: {
+        permitSearchId,
+        clayEnrichmentStatus: 'INCOMPLETE',
+        email: null,
+        hunterEnrichedAt: null,
+      },
+      select: { id: true },
+    });
+
+    if (contacts.length === 0) {
+      logger.info({ permitSearchId }, 'No incomplete contacts to send to Hunter');
+      return;
+    }
+
+    logger.info({ permitSearchId, count: contacts.length }, 'Sending incomplete contacts to Hunter.io');
+
+    const hunterService = new HunterEnrichmentService();
+    let enrichedCount = 0;
+
+    for (const contact of contacts) {
+      try {
+        const result = await hunterService.enrichContact(contact.id);
+
+        if (result.success) {
+          enrichedCount++;
+          await prisma.contact.update({
+            where: { id: contact.id },
+            data: { clayEnrichmentStatus: 'ENRICHED' },
+          });
+          await prisma.activityLog.create({
+            data: {
+              contactId: contact.id,
+              action: 'hunter_enrichment_success',
+              description: `Hunter.io found email (confidence: ${result.confidence || 'N/A'})`,
+            },
+          });
+        } else {
+          await prisma.activityLog.create({
+            data: {
+              contactId: contact.id,
+              action: 'hunter_enrichment_failed',
+              description: `Hunter.io: ${result.error || 'No email found'}`,
+            },
+          });
+        }
+
+        // Rate limit: 1 second between Hunter API calls
+        if (contacts.indexOf(contact) < contacts.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      } catch (err: any) {
+        logger.warn({ contactId: contact.id, error: err.message }, 'Hunter enrichment failed for contact');
+      }
+    }
+
+    logger.info(
+      { permitSearchId, total: contacts.length, enriched: enrichedCount },
+      'Hunter.io enrichment pass complete'
+    );
+  }
+
   private async tagFallbackContacts(permitSearchId: string): Promise<void> {
     const incompleteContacts = await prisma.contact.findMany({
       where: { permitSearchId, clayEnrichmentStatus: 'INCOMPLETE' },
@@ -369,7 +434,7 @@ export class PermitPipelineService {
           data: {
             contactId: contact.id,
             action: 'email_not_found',
-            description: 'All enrichment sources exhausted without finding an email address',
+            description: 'All enrichment sources exhausted (Shovels, Clay, Hunter) without finding an email address',
           },
         });
       }
