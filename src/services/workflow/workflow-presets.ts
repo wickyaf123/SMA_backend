@@ -43,9 +43,8 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         name: 'Lookup geo ID',
         action: 'lookup_geo_id',
         params: {
-          // The caller supplies city/state; these are filled at runtime
-          city: '',
-          state: '',
+          city: '', // Filled by caller via run_workflow_preset param overrides
+          state: '', // Filled by caller via run_workflow_preset param overrides
         },
         onFailure: 'abort',
       },
@@ -55,7 +54,7 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         params: {
           geoId: { $ref: 'step_1.output.geoId' },
           city: { $ref: 'step_1.output.city' },
-          permitType: '', // Supplied at runtime (e.g. 'residential', 'solar')
+          permitType: '', // Filled by caller via run_workflow_preset param overrides
         },
         onFailure: 'abort',
       },
@@ -123,7 +122,8 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
       {
         name: 'Get contact replies',
         action: 'get_contact_replies',
-        params: {},
+        // No contactId — returns recent replies across all contacts (contactId is optional)
+        params: { limit: 20 },
         onFailure: 'skip',
       },
     ],
@@ -142,32 +142,30 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
       {
         name: 'Find contacts missing email',
         action: 'list_contacts',
-        params: { hasEmail: false },
+        params: { filter: 'missing_email' },
         onFailure: 'skip',
-        _meta: { confirmationGated: true, label: 'Missing email', intent: 'Filter results for contacts with no email address' },
+        _meta: { confirmationGated: true, label: 'Missing email', intent: 'Filter results for contacts with no/empty email address' },
       },
       {
         name: 'Find contacts with invalid phone',
         action: 'list_contacts',
-        params: { phoneValidationStatus: 'INVALID' },
+        params: { filter: 'invalid_phone' },
         onFailure: 'skip',
-        _meta: { confirmationGated: true, label: 'Invalid phone', intent: 'Filter results for contacts with invalid phone numbers' },
+        _meta: { confirmationGated: true, label: 'Invalid phone', intent: 'Filter results for contacts with no phone, empty phone, or invalid phone' },
       },
       {
-        name: 'Find contacts with invalid email',
+        name: 'Find duplicate contacts',
         action: 'list_contacts',
-        params: { emailValidationStatus: 'INVALID' },
+        params: { filter: 'duplicates' },
         onFailure: 'skip',
-        _meta: { confirmationGated: true, label: 'Invalid email', intent: 'Identify contacts with invalid email addresses' },
+        _meta: { confirmationGated: true, label: 'Duplicates', intent: 'Find contacts sharing the same email address' },
       },
       {
-        name: 'Find stale contacts (90-day no engagement)',
+        name: 'Find contacts with no engagement',
         action: 'list_contacts',
-        params: {
-          status: 'NEW',
-        },
+        params: { filter: 'no_engagement' },
         onFailure: 'skip',
-        _meta: { confirmationGated: true, label: '90-day no engagement', intent: 'Find contacts with status NEW that have had no engagement in 90+ days' },
+        _meta: { confirmationGated: true, label: 'No engagement', intent: 'Find contacts enrolled 14+ days with zero replies' },
       },
     ],
   },
@@ -197,7 +195,8 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
         params: {
           geoId: { $ref: 'step_1.output.geoId' },
           city: { $ref: 'step_1.output.city' },
-          permitType: '', // Supplied at runtime
+          permitType: '', // Filled by caller via run_workflow_preset param overrides
+          maxResults: 25,
         },
         onFailure: 'abort',
       },
