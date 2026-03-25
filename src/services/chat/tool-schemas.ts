@@ -16,6 +16,8 @@ const toolSchemas: Record<string, z.ZodSchema> = {
     geoId: z.string().max(100).optional(),
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD').optional(),
     endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD').optional(),
+    maxResults: z.number().int().min(1).max(500).optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
   }),
 
   get_permit_searches: z.object({
@@ -33,6 +35,7 @@ const toolSchemas: Record<string, z.ZodSchema> = {
     hasPhone: z.boolean().optional(),
     emailValidationStatus: z.string().max(50).optional(),
     phoneValidationStatus: z.string().max(50).optional(),
+    filter: z.enum(['missing_email', 'invalid_phone', 'duplicates', 'no_engagement']).optional(),
     page: z.number().int().min(1).optional(),
     limit: z.number().int().min(1).max(100).optional(),
   }),

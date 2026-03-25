@@ -54,7 +54,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'search_permits',
     description:
-      'Search for building permits by type, city, and date range. Creates a permit search job.',
+      'Search for building permits by type, city, and date range. Kicks off a background search job and returns immediately with a job ID. Results arrive asynchronously via real-time notifications — do NOT wait for them. Tell the user the search is running and they can keep chatting.',
     input_schema: {
       type: 'object',
       properties: {
@@ -75,6 +75,15 @@ export const toolDefinitions: ToolDefinition[] = [
         endDate: {
           type: 'string',
           description: 'End date in YYYY-MM-DD format',
+        },
+        maxResults: {
+          type: 'number',
+          description:
+            'Maximum number of contractor records to return. Default 50, max 500. If user asks for more than 500, use 500 and explain the limit.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results to return. Alias for maxResults. Default 50, max 500.',
         },
       },
       required: ['permitType', 'city'],
@@ -135,6 +144,11 @@ export const toolDefinitions: ToolDefinition[] = [
         phoneValidationStatus: {
           type: 'string',
           description: 'Filter by phone validation status (PENDING, VALID_MOBILE, VALID_LANDLINE, INVALID, UNKNOWN)',
+        },
+        filter: {
+          type: 'string',
+          enum: ['missing_email', 'invalid_phone', 'duplicates', 'no_engagement'],
+          description: 'Apply a predefined data quality filter. missing_email: contacts with no/empty email. invalid_phone: contacts with no/empty/invalid phone. duplicates: contacts sharing the same email. no_engagement: contacts enrolled 14+ days with zero replies.',
         },
         page: { type: 'number', description: 'Page number (default 1)' },
         limit: {
@@ -408,14 +422,13 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'get_contact_replies',
     description:
-      'Get all replies received from a specific contact, including channel and content.',
+      'Get replies received from a contact, or all recent replies when contactId is omitted.',
     input_schema: {
       type: 'object',
       properties: {
-        contactId: { type: 'string', description: 'The contact ID' },
+        contactId: { type: 'string', description: 'The contact ID. When omitted, returns all recent replies across all contacts.' },
         limit: { type: 'number', description: 'Max replies to return (default 20)' },
       },
-      required: ['contactId'],
     },
   },
   {
@@ -1154,6 +1167,7 @@ export async function executeTool(
       case 'search_permits': {
         const startDate = input.startDate || new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString().split('T')[0];
         const endDate = input.endDate || new Date().toISOString().split('T')[0];
+        const maxResults = Math.min(input.limit || input.maxResults || 50, 500);
 
         // Parse city and state from input (supports "Austin, TX" or separate fields)
         let cityName = input.city || '';
@@ -1204,31 +1218,37 @@ export async function executeTool(
             data: { status: 'SEARCHING' },
           });
 
-          realtimeEmitter.emitJobEvent({
-            jobId: search.id,
-            jobType: 'permit:search',
-            status: 'started',
-          });
-
-          if (search.conversationId) {
-            emitJobToConversation(search.conversationId, WSEventType.JOB_STARTED, {
-              jobId: search.id,
-              jobType: 'permit:search',
-              status: 'started',
-              result: { permitType: input.permitType, city: cityName },
-            });
-          }
+          const emitProgress = (event: any) => {
+            if (search.conversationId) {
+              emitJobToConversation(search.conversationId, WSEventType.JOB_PROGRESS, {
+                jobId: search.id,
+                jobType: 'permit:search',
+                status: 'progress',
+                result: {
+                  permitType: input.permitType,
+                  city: cityName,
+                  ...event,
+                },
+              });
+            }
+          };
 
           let result;
           if (stateAbbr) {
             result = await shovelsScraperService.scrapeByCity(
               input.permitType, cityName, stateAbbr,
-              dateRangeDays, 100, true
+              dateRangeDays, maxResults, true,
+              undefined,
+              emitProgress,
+              search.id
             );
           } else {
             result = await shovelsScraperService.scrapeByPermitTypeAndGeo(
               input.permitType, resolvedGeoId, cityName,
-              dateRangeDays, 100, true
+              dateRangeDays, maxResults, true,
+              undefined, undefined,
+              emitProgress,
+              search.id
             );
           }
 
@@ -1267,54 +1287,66 @@ export async function executeTool(
             return;
           }
 
-          // Scraping done — link contacts, update status, then enrich (skip re-scrape)
-          await prisma.permitSearch.update({
-            where: { id: search.id },
-            data: { status: 'ENRICHING', totalFound: result.totalImported },
-          });
+          // Scraping done — atomically link contacts and update status to prevent race conditions
+          await prisma.$transaction(async (tx) => {
+            await tx.permitSearch.update({
+              where: { id: search.id },
+              data: { status: 'ENRICHING', totalFound: result.totalImported },
+            });
 
-          await prisma.contact.updateMany({
-            where: {
-              source: 'shovels',
-              permitType: input.permitType,
-              permitCity: cityName,
-              permitSearchId: null,
-              createdAt: { gte: new Date(Date.now() - 3600000) },
-            },
-            data: { permitSearchId: search.id },
-          });
-
-          // Try Clay enrichment (non-blocking)
-          permitPipelineService.sendToClayEnrichment(search.id).catch((err) => {
-            logger.warn({ err: err.message, searchId: search.id }, 'Clay enrichment skipped or failed');
-          });
-
-          // Mark as ready for review
-          await prisma.permitSearch.update({
-            where: { id: search.id },
-            data: { status: 'READY_FOR_REVIEW' },
-          });
-
-          realtimeEmitter.emitJobEvent({
-            jobId: search.id,
-            jobType: 'permit:search',
-            status: 'completed',
-            result: { total: result.totalImported, scraped: result.totalScraped, filtered: result.filtered },
+            await tx.contact.updateMany({
+              where: {
+                source: 'shovels',
+                permitType: input.permitType,
+                permitCity: cityName,
+                permitSearchId: null,
+                createdAt: { gte: new Date(Date.now() - config.defaults.contactFreshnessWindowMs) },
+              },
+              data: { permitSearchId: search.id },
+            });
           });
 
           if (search.conversationId) {
-            emitJobToConversation(search.conversationId, WSEventType.JOB_COMPLETED, {
+            emitJobToConversation(search.conversationId, WSEventType.JOB_PROGRESS, {
               jobId: search.id,
               jobType: 'permit:search',
-              status: 'completed',
-              result: { total: result.totalImported, scraped: result.totalScraped, filtered: result.filtered },
+              status: 'progress',
+              result: {
+                permitType: input.permitType,
+                city: cityName,
+                phase: 'enriching',
+                imported: result.totalImported,
+                duplicates: result.duplicates,
+                filtered: result.filtered,
+                message: `Imported ${result.totalImported} contacts, enriching emails...`,
+              },
             });
           }
+
+          // Send to Clay enrichment (non-blocking) — finalization happens via
+          // webhook callback → handleClayCallback → checkAndFinalizeSearch → buildSheetForSearch
+          // which emits JOB_COMPLETED to the conversation when done
+          permitPipelineService.sendToClayEnrichment(search.id).catch((err) => {
+            logger.warn({ err: err.message, searchId: search.id }, 'Clay enrichment skipped or failed');
+          });
         };
 
-        try {
-          await runSearch();
-        } catch (err: any) {
+        realtimeEmitter.emitJobEvent({
+          jobId: search.id,
+          jobType: 'permit:search',
+          status: 'started',
+        });
+
+        if (context?.conversationId) {
+          emitJobToConversation(context.conversationId, WSEventType.JOB_STARTED, {
+            jobId: search.id,
+            jobType: 'permit:search',
+            status: 'started',
+            result: { permitType: input.permitType, city: cityName },
+          });
+        }
+
+        runSearch().catch(async (err: any) => {
           logger.error({ err: err.message, searchId: search.id }, 'Permit search pipeline failed');
           await prisma.permitSearch.update({
             where: { id: search.id },
@@ -1328,25 +1360,15 @@ export async function executeTool(
               error: err.message,
             });
           }
-          return {
-            success: false,
-            error: `Permit search failed: ${err.message}`,
-            data: { searchId: search.id },
-          };
-        }
-
-        const finalSearch = await prisma.permitSearch.findUnique({
-          where: { id: search.id },
-          select: { status: true, totalFound: true },
         });
 
         return {
           success: true,
           data: {
             searchId: search.id,
-            status: finalSearch?.status || 'COMPLETED',
-            totalFound: finalSearch?.totalFound || 0,
-            message: `Permit search for ${input.permitType} permits in ${cityName}${stateAbbr ? ', ' + stateAbbr : ''} completed with ${finalSearch?.totalFound || 0} results.`,
+            status: 'SEARCHING',
+            maxResults,
+            message: `Permit search for ${input.permitType} permits in ${cityName}${stateAbbr ? ', ' + stateAbbr : ''} has been started (up to ${maxResults} records). Results will arrive via real-time notifications when the search completes.`,
           },
         };
       }
@@ -1406,6 +1428,67 @@ export async function executeTool(
         if (input.hasPhone === false) where.phone = null;
         if (input.emailValidationStatus) where.emailValidationStatus = input.emailValidationStatus;
         if (input.phoneValidationStatus) where.phoneValidationStatus = input.phoneValidationStatus;
+
+        // Data quality filter handling
+        if (input.filter === 'missing_email') {
+          where.OR = [
+            { email: null },
+            { email: '' },
+          ];
+        } else if (input.filter === 'invalid_phone') {
+          where.OR = [
+            { phone: null },
+            { phone: '' },
+            { phoneValidationStatus: 'INVALID' },
+          ];
+        } else if (input.filter === 'duplicates') {
+          const duplicateEmails = await prisma.$queryRaw<{ email: string }[]>`
+            SELECT email FROM "Contact"
+            WHERE email IS NOT NULL AND email != ''
+            GROUP BY email
+            HAVING COUNT(*) > 1
+          `;
+
+          const emails = duplicateEmails.map(d => d.email);
+
+          if (emails.length === 0) {
+            return {
+              success: true,
+              data: {
+                contacts: [],
+                pagination: { page: 1, limit, total: 0, totalPages: 0 },
+                duplicateGroups: 0,
+              },
+            };
+          }
+
+          where.email = { in: emails };
+        } else if (input.filter === 'no_engagement') {
+          const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+
+          const noEngagementIds = await prisma.$queryRaw<{ id: string }[]>`
+            SELECT c.id FROM "Contact" c
+            INNER JOIN "CampaignEnrollment" ce ON ce."contactId" = c.id
+            LEFT JOIN "Reply" r ON r."contactId" = c.id
+            WHERE ce."enrolledAt" <= ${fourteenDaysAgo}
+              AND r.id IS NULL
+            GROUP BY c.id
+          `;
+
+          const ids = noEngagementIds.map(r => r.id);
+
+          if (ids.length === 0) {
+            return {
+              success: true,
+              data: {
+                contacts: [],
+                pagination: { page: 1, limit, total: 0, totalPages: 0 },
+              },
+            };
+          }
+
+          where.id = { in: ids };
+        }
 
         const [contacts, total] = await Promise.all([
           prisma.contact.findMany({
@@ -1864,8 +1947,13 @@ export async function executeTool(
       }
 
       case 'get_contact_replies': {
+        const replyWhere: Record<string, any> = {};
+        if (input.contactId) {
+          replyWhere.contactId = input.contactId;
+        }
+
         const replies = await prisma.reply.findMany({
-          where: { contactId: input.contactId },
+          where: replyWhere,
           orderBy: { receivedAt: 'desc' },
           take: input.limit || 20,
         });
@@ -1875,7 +1963,7 @@ export async function executeTool(
           data: {
             replies,
             total: replies.length,
-            contactId: input.contactId,
+            ...(input.contactId ? { contactId: input.contactId } : {}),
           },
         };
       }
