@@ -344,28 +344,39 @@ model LinkedInAction {
   @@index([scheduledAt])
 }
 
+enum ReplyClassification {
+  BOOK_CALL
+  MORE_INFO
+  NOT_INTERESTED
+  OBJECTION
+  UNKNOWN
+}
+
 model Reply {
-  id          String          @id @default(dbgenerated("(gen_random_uuid())::text"))
-  contactId   String
-  channel     OutreachChannel
-  content     String?
-  subject     String?
-  externalId  String?
-  messageId   String?
-  inReplyTo   String?
-  fromAddress String?
-  receivedAt  DateTime        @db.Timestamptz(6)
-  rawPayload  Json?
-  isProcessed Boolean         @default(false)
-  processedAt DateTime?       @db.Timestamptz(6)
-  createdAt   DateTime        @default(now()) @db.Timestamptz(6)
-  threadId    String?
-  contact     Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  id              String               @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId       String
+  channel         OutreachChannel
+  content         String?
+  subject         String?
+  externalId      String?
+  messageId       String?
+  inReplyTo       String?
+  fromAddress     String?
+  receivedAt      DateTime             @db.Timestamptz(6)
+  rawPayload      Json?
+  isProcessed     Boolean              @default(false)
+  processedAt     DateTime?            @db.Timestamptz(6)
+  createdAt       DateTime             @default(now()) @db.Timestamptz(6)
+  threadId        String?
+  classification  ReplyClassification?
+  classifiedAt    DateTime?            @db.Timestamptz(6)
+  contact         Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   @@index([contactId])
   @@index([channel])
   @@index([receivedAt])
   @@index([isProcessed])
+  @@index([classification])
 }
 
 model ActivityLog {
@@ -862,6 +873,7 @@ enum ContactStatus {
   IRRELEVANT
   IN_SEQUENCE
   REPLIED
+  ENGAGED
   BOUNCED
   UNSUBSCRIBED
   COMPLETED
