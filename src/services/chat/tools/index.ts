@@ -1,6 +1,11 @@
-import { ToolDefinition, ToolResult, ToolContext, ToolRegistry } from './types';
+import { ToolDefinition, ToolResult, ToolContext, ToolRegistry, ToolErrorCode } from './types';
 import { validateToolInput } from '../tool-schemas';
 import { logger } from '../../../utils/logger';
+import { ValidationError, ExternalServiceError } from '../../../utils/errors';
+
+// Warn-mode: log validation failures but pass through original input.
+// Set TOOL_VALIDATION_MODE=reject to hard-fail on validation errors instead.
+const WARN_MODE = process.env.TOOL_VALIDATION_MODE !== 'reject';
 
 // Import all domain modules
 import { registerTools as registerPermitTools } from './permit';
@@ -52,18 +57,53 @@ export async function executeTool(
   logger.info(`Executing tool: ${name}`, { input });
 
   try {
-    const validatedInput = validateToolInput(name, input);
+    // --- Warn-mode validation gateway ---
+    let resolvedInput = input;
+    try {
+      resolvedInput = validateToolInput(name, input);
+    } catch (validationError) {
+      const valMessage = validationError instanceof Error ? validationError.message : String(validationError);
+      if (WARN_MODE) {
+        logger.warn(`Tool input validation failed (warn-mode, passing through original input)`, {
+          tool: name,
+          input,
+          error: valMessage,
+        });
+        // Pass through original input unchanged
+      } else {
+        return { success: false, error: `Invalid input -- ${valMessage}`, code: 'VALIDATION' };
+      }
+    }
+
     const handler = registry.handlers.get(name);
 
     if (!handler) {
       return { success: false, error: `Unknown tool: ${name}` };
     }
 
-    return await handler(validatedInput, context);
+    return await handler(resolvedInput, context);
   } catch (error) {
+    // --- Structured error classification ---
     const message = error instanceof Error ? error.message : 'Unknown error occurred';
     logger.error(`Tool execution failed: ${name}`, { error: message, input });
-    return { success: false, error: message };
+
+    let code: ToolErrorCode;
+
+    if (error instanceof ValidationError) {
+      code = 'VALIDATION';
+    } else if (error instanceof ExternalServiceError) {
+      code = 'SERVICE';
+    } else if (typeof message === 'string' && /not configured/i.test(message)) {
+      code = 'INTEGRATION';
+    } else {
+      code = 'INTERNAL';
+    }
+
+    if (code === 'INTERNAL') {
+      return { success: false, error: 'Something went wrong -- the error has been reported', code };
+    }
+
+    return { success: false, error: message, code };
   }
 }
 

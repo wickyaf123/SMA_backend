@@ -4,10 +4,13 @@ export interface ToolDefinition {
   input_schema: Record<string, any>;
 }
 
+export type ToolErrorCode = 'VALIDATION' | 'PRECONDITION' | 'SERVICE' | 'INTEGRATION' | 'INTERNAL';
+
 export interface ToolResult {
   success: boolean;
   data?: any;
   error?: string;
+  code?: ToolErrorCode;
 }
 
 export interface ToolContext {
