@@ -12,7 +12,7 @@
 
 import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
-import { executeTool } from '../chat/tools';
+import { executeTool } from '../chat/tools/index';
 import { workflowQueue } from '../../jobs/queues';
 import {
   emitWorkflowStarted,

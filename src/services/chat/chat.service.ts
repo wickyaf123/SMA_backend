@@ -2,9 +2,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '../../config/database';
 import { config } from '../../config/index';
 import { logger } from '../../utils/logger';
-import { NotFoundError } from '../../utils/errors';
+import { NotFoundError, RateLimitError } from '../../utils/errors';
 import { retryWithBackoff } from '../../utils/retry';
-import { toolDefinitions, executeTool } from './tools';
+import { toolDefinitions, executeTool } from './tools/index';
 import { JERRY_SYSTEM_PROMPT } from './system-prompt';
 
 const MAX_HISTORY_MESSAGES = 50;
@@ -64,12 +64,11 @@ export class ChatService {
   }
 
   async deleteConversation(id: string): Promise<void> {
-    const existing = await prisma.conversation.findUnique({ where: { id } });
-    if (!existing) {
+    const result = await prisma.conversation.deleteMany({ where: { id } });
+    if (result.count === 0) {
       logger.warn({ conversationId: id }, 'Conversation not found for deletion, skipping');
       return;
     }
-    await prisma.conversation.delete({ where: { id } });
     logger.info({ conversationId: id }, 'Deleted conversation');
   }
 
@@ -191,7 +190,7 @@ export class ChatService {
 
           if (messagesForSummary.length > 0) {
             const summaryResponse = await this.getClient().messages.create({
-              model: 'claude-haiku-4-5-20241022',
+              model: 'claude-haiku-4-5-20251001',
               max_tokens: 300,
               messages: [{
                 role: 'user',
@@ -477,7 +476,7 @@ export class ChatService {
       if (messageCount <= 3) {
         try {
           const titleResponse = await this.getClient().messages.create({
-            model: 'claude-haiku-4-5-20241022',
+            model: 'claude-haiku-4-5-20251001',
             max_tokens: 20,
             messages: [
               {
@@ -530,6 +529,17 @@ export class ChatService {
         if (onDone) onDone(fullResponse || streamedText || '');
         return null;
       }
+
+      // Handle rate limit errors gracefully — operational error, won't be sent to Sentry
+      const status = error?.status || error?.error?.status;
+      if (status === 429) {
+        logger.warn({ conversationId }, 'Claude API rate limit hit');
+        const userMsg = 'I\'m currently experiencing high demand. Please try again in a moment.';
+        if (onError) onError(userMsg);
+        this.activeStreams.delete(conversationId);
+        throw new RateLimitError(userMsg);
+      }
+
       logger.error({ error, conversationId }, 'Error in sendMessage');
       if (onError) onError(error.message || 'An error occurred');
       throw error;
