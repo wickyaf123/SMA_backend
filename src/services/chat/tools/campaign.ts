@@ -1,4 +1,4 @@
-import { ToolDefinition, ToolHandler, ToolRegistry } from './types';
+import { ToolDefinition, ToolHandler, ToolRegistry, ToolErrorCode } from './types';
 import { prisma } from '../../../config/database';
 import { campaignService } from '../../campaign/campaign.service';
 
@@ -146,6 +146,7 @@ const handlers: Record<string, ToolHandler> = {
         return {
           success: false,
           error: `Campaign not found with ID: ${input.campaignId}`,
+          code: 'PRECONDITION' as ToolErrorCode,
         };
       }
 
@@ -209,10 +210,10 @@ const handlers: Record<string, ToolHandler> = {
       select: { status: true, name: true },
     });
     if (!campaign) {
-      return { success: false, error: `Campaign not found with ID: ${input.campaignId}` };
+      return { success: false, error: `Campaign not found with ID: ${input.campaignId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
     if (campaign.status === 'DRAFT' || campaign.status === 'COMPLETED') {
-      return { success: false, error: `Cannot enroll contacts in campaign "${campaign.name}" — status is ${campaign.status}. Campaign must be ACTIVE or SCHEDULED.` };
+      return { success: false, error: `Cannot enroll contacts in campaign "${campaign.name}" -- status is ${campaign.status}. Campaign must be ACTIVE or SCHEDULED.`, code: 'PRECONDITION' as ToolErrorCode };
     }
     const enrollResult = await campaignService.enrollContacts(
       input.campaignId,
@@ -232,8 +233,21 @@ const handlers: Record<string, ToolHandler> = {
 
   stop_enrollment: async (input) => {
     if (!input.campaignId || !input.contactId) {
-      return { success: false, error: 'Both campaignId and contactId are required to stop enrollment.' };
+      return { success: false, error: 'Both campaignId and contactId are required to stop enrollment.', code: 'VALIDATION' as ToolErrorCode };
     }
+
+    // Pre-validate: check enrollment exists and is in ENROLLED status
+    const enrollment = await prisma.campaignEnrollment.findFirst({
+      where: { campaignId: input.campaignId, contactId: input.contactId },
+      select: { id: true, status: true },
+    });
+    if (!enrollment) {
+      return { success: false, error: 'Enrollment not found', code: 'PRECONDITION' as ToolErrorCode };
+    }
+    if (enrollment.status !== 'ENROLLED') {
+      return { success: false, error: `Cannot stop enrollment -- status is ${enrollment.status}`, code: 'PRECONDITION' as ToolErrorCode };
+    }
+
     try {
       await campaignService.stopEnrollment(
         input.campaignId,
@@ -248,7 +262,7 @@ const handlers: Record<string, ToolHandler> = {
         },
       };
     } catch (err: any) {
-      return { success: false, error: `Failed to stop enrollment: ${err.message}` };
+      return { success: false, error: `Failed to stop enrollment: ${err.message}`, code: 'SERVICE' as ToolErrorCode };
     }
   },
 
@@ -293,9 +307,9 @@ const handlers: Record<string, ToolHandler> = {
 
   batch_enroll_contacts: async (input) => {
     const { campaignId, contactIds } = input;
-    if (!campaignId) return { success: false, error: 'campaignId is required' };
+    if (!campaignId) return { success: false, error: 'campaignId is required', code: 'VALIDATION' as ToolErrorCode };
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
-      return { success: false, error: 'contactIds must be a non-empty array' };
+      return { success: false, error: 'contactIds must be a non-empty array', code: 'VALIDATION' as ToolErrorCode };
     }
 
     const batchCampaign = await prisma.campaign.findUnique({
@@ -304,7 +318,7 @@ const handlers: Record<string, ToolHandler> = {
         _count: { select: { enrollments: true } },
       },
     });
-    if (!batchCampaign) return { success: false, error: `Campaign not found: ${campaignId}` };
+    if (!batchCampaign) return { success: false, error: `Campaign not found: ${campaignId}`, code: 'PRECONDITION' as ToolErrorCode };
 
     // Pre-enrollment validation
     const eligible: any[] = [];

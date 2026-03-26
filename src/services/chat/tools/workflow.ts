@@ -1,4 +1,4 @@
-import { ToolDefinition, ToolHandler, ToolRegistry } from './types';
+import { ToolDefinition, ToolHandler, ToolRegistry, ToolErrorCode } from './types';
 import { workflowEngine } from '../../workflow/workflow.engine';
 import { getAllPresets, getPresetById } from '../../workflow/workflow-presets';
 
@@ -89,11 +89,25 @@ const definitions: ToolDefinition[] = [
 
 const handlers: Record<string, ToolHandler> = {
   create_workflow: async (input) => {
+    // Pre-validate: check all step actions reference known tools
+    const { toolDefinitions } = await import('./index');
+    const knownTools = new Set(toolDefinitions.map((d) => d.name));
+    const steps = input.steps || [];
+    for (const step of steps) {
+      if (step.action && !knownTools.has(step.action)) {
+        return {
+          success: false,
+          error: `Cannot create workflow -- step "${step.name}" references unknown tool: ${step.action}`,
+          code: 'PRECONDITION' as ToolErrorCode,
+        };
+      }
+    }
+
     const workflow = await workflowEngine.createWorkflow({
       conversationId: input.conversationId,
       name: input.name,
       description: input.description,
-      steps: (input.steps || []).map((step: any) => ({
+      steps: steps.map((step: any) => ({
         name: step.name,
         action: step.action,
         params: step.params || {},
@@ -117,7 +131,7 @@ const handlers: Record<string, ToolHandler> = {
   get_workflow_status: async (input) => {
     const workflowStatus = await workflowEngine.getWorkflowStatus(input.workflowId);
     if (!workflowStatus) {
-      return { success: false, error: `Workflow not found with ID: ${input.workflowId}` };
+      return { success: false, error: `Workflow not found with ID: ${input.workflowId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     return {
@@ -129,7 +143,7 @@ const handlers: Record<string, ToolHandler> = {
   cancel_workflow: async (input) => {
     const cancelledWorkflow = await workflowEngine.cancelWorkflow(input.workflowId);
     if (!cancelledWorkflow) {
-      return { success: false, error: `Workflow not found with ID: ${input.workflowId}` };
+      return { success: false, error: `Workflow not found with ID: ${input.workflowId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     return {
@@ -167,6 +181,7 @@ const handlers: Record<string, ToolHandler> = {
       return {
         success: false,
         error: `Workflow preset not found with ID: "${input.presetId}". Use list_workflow_presets to see available presets.`,
+        code: 'PRECONDITION' as ToolErrorCode,
       };
     }
 

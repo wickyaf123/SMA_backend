@@ -1,4 +1,4 @@
-import { ToolDefinition, ToolHandler, ToolRegistry } from './types';
+import { ToolDefinition, ToolHandler, ToolRegistry, ToolErrorCode } from './types';
 import { prisma } from '../../../config/database';
 import { smsOutreachService } from '../../outreach/sms.service';
 import { ghlClient } from '../../../integrations/ghl/client';
@@ -23,7 +23,7 @@ const definitions: ToolDefinition[] = [
 const handlers: Record<string, ToolHandler> = {
   send_sms: async (input) => {
     if (!ghlClient.isConfigured()) {
-      return { success: false, error: 'GoHighLevel is not configured. Set GHL_API_KEY and GHL_LOCATION_ID to enable SMS sending.' };
+      return { success: false, error: 'GoHighLevel is not configured. Set GHL_API_KEY and GHL_LOCATION_ID to enable SMS sending.', code: 'INTEGRATION' as ToolErrorCode };
     }
     // Pre-validate: check contact has phone
     const smsContact = await prisma.contact.findUnique({
@@ -31,10 +31,10 @@ const handlers: Record<string, ToolHandler> = {
       select: { phone: true },
     });
     if (!smsContact) {
-      return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+      return { success: false, error: `Contact not found with ID: ${input.contactId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
     if (!smsContact.phone) {
-      return { success: false, error: `Contact ${input.contactId} has no phone number. Cannot send SMS.` };
+      return { success: false, error: `Contact ${input.contactId} has no phone number. Cannot send SMS.`, code: 'PRECONDITION' as ToolErrorCode };
     }
     const smsResult = await smsOutreachService.sendSMS({
       contactId: input.contactId,
@@ -43,7 +43,7 @@ const handlers: Record<string, ToolHandler> = {
     });
 
     if (!smsResult.success) {
-      return { success: false, error: smsResult.error || 'Failed to send SMS' };
+      return { success: false, error: smsResult.error || 'Failed to send SMS', code: 'SERVICE' as ToolErrorCode };
     }
 
     // Log activity

@@ -1,4 +1,4 @@
-import { ToolDefinition, ToolHandler, ToolRegistry } from './types';
+import { ToolDefinition, ToolHandler, ToolRegistry, ToolErrorCode } from './types';
 import { messageTemplateService } from '../../templates/message-template.service';
 
 const definitions: ToolDefinition[] = [
@@ -127,7 +127,7 @@ const handlers: Record<string, ToolHandler> = {
     }
 
     if (Object.keys(templateUpdateData).length === 0) {
-      return { success: false, error: 'No valid fields provided to update' };
+      return { success: false, error: 'No valid fields provided to update', code: 'VALIDATION' as ToolErrorCode };
     }
 
     const updatedTemplate = await messageTemplateService.updateTemplate(

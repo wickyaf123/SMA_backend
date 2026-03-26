@@ -1,4 +1,4 @@
-import { ToolDefinition, ToolHandler, ToolRegistry } from './types';
+import { ToolDefinition, ToolHandler, ToolRegistry, ToolErrorCode } from './types';
 import { prisma } from '../../../config/database';
 import { realieEnrichmentService } from '../../enrichment/realie.service';
 import { shovelsHomeownerEnrichmentService } from '../../enrichment/shovels-homeowner.service';
@@ -144,7 +144,7 @@ const handlers: Record<string, ToolHandler> = {
       select: { id: true, fullName: true, email: true },
     });
     if (!homeowner) {
-      return { success: false, error: `Homeowner not found with ID: ${input.homeownerId}` };
+      return { success: false, error: `Homeowner not found with ID: ${input.homeownerId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     await prisma.homeowner.delete({ where: { id: input.homeownerId } });

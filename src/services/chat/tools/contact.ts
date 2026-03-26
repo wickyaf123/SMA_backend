@@ -1,4 +1,4 @@
-import { ToolDefinition, ToolHandler, ToolRegistry } from './types';
+import { ToolDefinition, ToolHandler, ToolRegistry, ToolErrorCode } from './types';
 import { prisma } from '../../../config/database';
 import { ghlClient } from '../../../integrations/ghl/client';
 
@@ -430,6 +430,7 @@ const handlers: Record<string, ToolHandler> = {
       return {
         success: false,
         error: `Contact not found with ID: ${input.contactId}`,
+        code: 'PRECONDITION' as ToolErrorCode,
       };
     }
     return { success: true, data: contact };
@@ -477,7 +478,7 @@ const handlers: Record<string, ToolHandler> = {
       where: { id: input.contactId },
     });
     if (!existing) {
-      return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+      return { success: false, error: `Contact not found with ID: ${input.contactId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     const updateFields: Record<string, any> = {};
@@ -495,7 +496,7 @@ const handlers: Record<string, ToolHandler> = {
     }
 
     if (Object.keys(updateFields).length === 0) {
-      return { success: false, error: 'No valid fields provided to update' };
+      return { success: false, error: 'No valid fields provided to update', code: 'VALIDATION' as ToolErrorCode };
     }
 
     const updatedContact = await prisma.contact.update({
@@ -528,7 +529,7 @@ const handlers: Record<string, ToolHandler> = {
       select: { id: true, fullName: true, email: true },
     });
     if (!toDelete) {
-      return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+      return { success: false, error: `Contact not found with ID: ${input.contactId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     await prisma.contact.delete({ where: { id: input.contactId } });
@@ -681,7 +682,7 @@ const handlers: Record<string, ToolHandler> = {
     });
 
     if (!noteContact) {
-      return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+      return { success: false, error: `Contact not found with ID: ${input.contactId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     // Sync note to GHL if contact is linked and GHL is configured
@@ -724,7 +725,7 @@ const handlers: Record<string, ToolHandler> = {
     });
 
     if (!tagContact) {
-      return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+      return { success: false, error: `Contact not found with ID: ${input.contactId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     // Check if tag already exists to avoid duplicates
@@ -759,7 +760,7 @@ const handlers: Record<string, ToolHandler> = {
     });
 
     if (!removeTagContact) {
-      return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+      return { success: false, error: `Contact not found with ID: ${input.contactId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     const filteredTags = removeTagContact.tags.filter((t) => t !== input.tag);
@@ -781,10 +782,10 @@ const handlers: Record<string, ToolHandler> = {
   batch_create_contacts: async (input) => {
     const { contacts } = input;
     if (!Array.isArray(contacts) || contacts.length === 0) {
-      return { success: false, error: 'contacts must be a non-empty array' };
+      return { success: false, error: 'contacts must be a non-empty array', code: 'VALIDATION' as ToolErrorCode };
     }
     if (contacts.length > 100) {
-      return { success: false, error: 'Maximum 100 contacts per batch' };
+      return { success: false, error: 'Maximum 100 contacts per batch', code: 'VALIDATION' as ToolErrorCode };
     }
 
     let created = 0;
@@ -860,7 +861,7 @@ const handlers: Record<string, ToolHandler> = {
     });
 
     if (!contractor) {
-      return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+      return { success: false, error: `Contact not found with ID: ${input.contactId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     return {
@@ -923,7 +924,7 @@ const handlers: Record<string, ToolHandler> = {
     });
 
     if (!custContact) {
-      return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+      return { success: false, error: `Contact not found with ID: ${input.contactId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     // 1. Update contact status to CUSTOMER

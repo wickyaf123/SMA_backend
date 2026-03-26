@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import { ToolDefinition, ToolHandler, ToolRegistry } from './types';
+import { ToolDefinition, ToolHandler, ToolRegistry, ToolErrorCode } from './types';
 import { prisma } from '../../../config/database';
 import { redis } from '../../../config/redis';
 import { config } from '../../../config';
@@ -234,7 +234,7 @@ const handlers: Record<string, ToolHandler> = {
   get_settings: async () => {
     const settings = await prisma.settings.findFirst();
     if (!settings) {
-      return { success: false, error: 'No settings found' };
+      return { success: false, error: 'No settings found', code: 'PRECONDITION' as ToolErrorCode };
     }
     return { success: true, data: settings };
   },
@@ -242,7 +242,7 @@ const handlers: Record<string, ToolHandler> = {
   update_settings: async (input) => {
     const settings = await prisma.settings.findFirst();
     if (!settings) {
-      return { success: false, error: 'No settings found to update' };
+      return { success: false, error: 'No settings found to update', code: 'PRECONDITION' as ToolErrorCode };
     }
 
     const updateData: Record<string, any> = {};
@@ -264,7 +264,7 @@ const handlers: Record<string, ToolHandler> = {
     }
 
     if (Object.keys(updateData).length === 0) {
-      return { success: false, error: 'No valid fields provided to update' };
+      return { success: false, error: 'No valid fields provided to update', code: 'VALIDATION' as ToolErrorCode };
     }
 
     const updated = await prisma.settings.update({
@@ -369,12 +369,13 @@ const handlers: Record<string, ToolHandler> = {
       return {
         success: false,
         error: `Invalid job name: ${input.jobName}. Valid jobs: ${validJobs.join(', ')}`,
+        code: 'VALIDATION' as ToolErrorCode,
       };
     }
 
     const scheduler = getScheduler();
     if (!scheduler) {
-      return { success: false, error: 'Scheduler is not initialized. The system may still be starting up.' };
+      return { success: false, error: 'Scheduler is not initialized. The system may still be starting up.', code: 'INTEGRATION' as ToolErrorCode };
     }
 
     try {
@@ -402,7 +403,7 @@ const handlers: Record<string, ToolHandler> = {
         },
       };
     } catch (err: any) {
-      return { success: false, error: `Failed to trigger job "${input.jobName}": ${err.message}` };
+      return { success: false, error: `Failed to trigger job "${input.jobName}": ${err.message}`, code: 'SERVICE' as ToolErrorCode };
     }
   },
 
@@ -498,7 +499,7 @@ const handlers: Record<string, ToolHandler> = {
 
   create_ghl_opportunity: async (input) => {
     if (!ghlClient.isConfigured()) {
-      return { success: false, error: 'GoHighLevel is not configured. Set GHL_API_KEY and GHL_LOCATION_ID to enable opportunity creation.' };
+      return { success: false, error: 'GoHighLevel is not configured. Set GHL_API_KEY and GHL_LOCATION_ID to enable opportunity creation.', code: 'INTEGRATION' as ToolErrorCode };
     }
     const oppContact = await prisma.contact.findUnique({
       where: { id: input.contactId },
@@ -506,11 +507,11 @@ const handlers: Record<string, ToolHandler> = {
     });
 
     if (!oppContact) {
-      return { success: false, error: `Contact not found with ID: ${input.contactId}` };
+      return { success: false, error: `Contact not found with ID: ${input.contactId}`, code: 'PRECONDITION' as ToolErrorCode };
     }
 
     if (!oppContact.ghlContactId) {
-      return { success: false, error: 'Contact not synced to GHL. The contact must have a ghlContactId to create an opportunity.' };
+      return { success: false, error: 'Contact not synced to GHL. The contact must have a ghlContactId to create an opportunity.', code: 'PRECONDITION' as ToolErrorCode };
     }
 
     // Get pipelineId/stageId from params or fall back to Settings
@@ -524,10 +525,10 @@ const handlers: Record<string, ToolHandler> = {
     }
 
     if (!pipelineId) {
-      return { success: false, error: 'No pipelineId provided and no default pipeline configured in settings.' };
+      return { success: false, error: 'No pipelineId provided and no default pipeline configured in settings.', code: 'PRECONDITION' as ToolErrorCode };
     }
     if (!stageId) {
-      return { success: false, error: 'No stageId provided and no default stage configured in settings.' };
+      return { success: false, error: 'No stageId provided and no default stage configured in settings.', code: 'PRECONDITION' as ToolErrorCode };
     }
 
     const opportunity = await ghlClient.createOpportunity({

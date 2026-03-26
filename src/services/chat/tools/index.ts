@@ -78,7 +78,7 @@ export async function executeTool(
     const handler = registry.handlers.get(name);
 
     if (!handler) {
-      return { success: false, error: `Unknown tool: ${name}` };
+      return { success: false, error: `Unknown tool: ${name}`, code: 'VALIDATION' as ToolErrorCode };
     }
 
     return await handler(resolvedInput, context);

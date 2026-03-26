@@ -1,4 +1,4 @@
-import { ToolDefinition, ToolHandler, ToolRegistry } from './types';
+import { ToolDefinition, ToolHandler, ToolRegistry, ToolErrorCode } from './types';
 import { campaignRoutingService } from '../../campaign/routing.service';
 
 const definitions: ToolDefinition[] = [
@@ -173,7 +173,7 @@ const handlers: Record<string, ToolHandler> = {
     }
 
     if (Object.keys(ruleUpdateData).length === 0) {
-      return { success: false, error: 'No valid fields provided to update' };
+      return { success: false, error: 'No valid fields provided to update', code: 'VALIDATION' as ToolErrorCode };
     }
 
     const updatedRule = await campaignRoutingService.updateRule(

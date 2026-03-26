@@ -1,4 +1,4 @@
-import { ToolDefinition, ToolHandler, ToolRegistry, ToolContext } from './types';
+import { ToolDefinition, ToolHandler, ToolRegistry, ToolContext, ToolErrorCode } from './types';
 import { prisma } from '../../../config/database';
 import { logger } from '../../../utils/logger';
 import { config } from '../../../config';
@@ -116,7 +116,7 @@ const handlers: Record<string, ToolHandler> = {
     }
 
     if (!cityName) {
-      return { success: false, error: 'city is required for permit search' };
+      return { success: false, error: 'city is required for permit search', code: 'VALIDATION' };
     }
 
     const dateRangeDays = Math.ceil(
@@ -327,7 +327,7 @@ const handlers: Record<string, ToolHandler> = {
 
   lookup_geo_id: async (input) => {
     const { city, state } = input;
-    if (!city) return { success: false, error: 'city is required' };
+    if (!city) return { success: false, error: 'city is required', code: 'VALIDATION' };
 
     const result = lookupGeoId(city, state);
 
