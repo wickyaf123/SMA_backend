@@ -11,6 +11,9 @@ import { prisma } from './database';
 
 let io: SocketIOServer | null = null;
 
+/** Track which conversations each socket is actively observing. */
+const socketConversations = new Map<string, Set<string>>();
+
 /**
  * WebSocket event types for type safety
  */
@@ -20,6 +23,8 @@ export enum WSEventType {
   JOB_PROGRESS = 'job:progress',
   JOB_COMPLETED = 'job:completed',
   JOB_FAILED = 'job:failed',
+  JOB_PAUSED = 'job:paused',
+  JOB_RESUMED = 'job:resumed',
 
   // Contact events
   CONTACT_CREATED = 'contact:created',
@@ -112,6 +117,10 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
     socket.on('chat:join', async (conversationId: string) => {
       const room = `chat:${conversationId}`;
       socket.join(room);
+      if (!socketConversations.has(socket.id)) {
+        socketConversations.set(socket.id, new Set());
+      }
+      socketConversations.get(socket.id)!.add(conversationId);
       logger.debug({ socketId: socket.id, room }, 'Client joined chat room');
 
       // Send active/recent job states so cards persist across page reloads
@@ -122,7 +131,7 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
             OR: [
               { status: { in: ['PENDING', 'SEARCHING', 'ENRICHING'] } },
               {
-                status: { in: ['READY_FOR_REVIEW', 'SHEET_WRITTEN', 'COMPLETED'] },
+                status: { in: ['READY_FOR_REVIEW', 'SHEET_WRITTEN', 'COMPLETED', 'FAILED', 'CANCELLED'] },
                 updatedAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
               },
             ],
@@ -132,9 +141,11 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
 
         for (const search of activeSearches) {
           const isInProgress = ['PENDING', 'SEARCHING', 'ENRICHING'].includes(search.status);
-          const isFailed = search.status === 'FAILED';
+          const isPending = search.status === 'PENDING';
+          const isCancelled = search.status === 'CANCELLED';
+          const isFailed = search.status === 'FAILED' || isCancelled;
           const event = isInProgress
-            ? WSEventType.JOB_STARTED
+            ? (isPending ? WSEventType.JOB_STARTED : WSEventType.JOB_PROGRESS)
             : isFailed
               ? WSEventType.JOB_FAILED
               : WSEventType.JOB_COMPLETED;
@@ -142,7 +153,8 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
           socket.emit(event, {
             jobId: search.id,
             jobType: 'permit:search',
-            status: isInProgress ? 'started' : isFailed ? 'failed' : 'completed',
+            status: isInProgress ? 'started' : isCancelled ? 'cancelled' : search.status === 'FAILED' ? 'failed' : 'completed',
+            isReplay: true,
             result: {
               total: search.totalFound,
               enriched: search.totalEnriched,
@@ -169,6 +181,7 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
     socket.on('chat:leave', (conversationId: string) => {
       const room = `chat:${conversationId}`;
       socket.leave(room);
+      socketConversations.get(socket.id)?.delete(conversationId);
       logger.debug({ socketId: socket.id, room }, 'Client left chat room');
     });
 
@@ -186,13 +199,68 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
       }
     });
 
+    socket.on('job:pause', (data: { jobId: string; conversationId: string }) => {
+      logger.info({ socketId: socket.id, jobId: data.jobId }, 'Client requested job pause');
+      const { pauseJob } = require('../services/scraper/shovels.service');
+      pauseJob(data.jobId);
+      const room = `chat:${data.conversationId}`;
+      io?.to(room).emit(WSEventType.JOB_PAUSED, {
+        jobId: data.jobId,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    socket.on('job:resume', (data: { jobId: string; conversationId: string }) => {
+      logger.info({ socketId: socket.id, jobId: data.jobId }, 'Client requested job resume');
+      const { resumeJob } = require('../services/scraper/shovels.service');
+      resumeJob(data.jobId);
+      const room = `chat:${data.conversationId}`;
+      io?.to(room).emit(WSEventType.JOB_RESUMED, {
+        jobId: data.jobId,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    socket.on('job:cancel', async (data: { jobId: string; conversationId: string }) => {
+      logger.info({ socketId: socket.id, jobId: data.jobId }, 'Client requested job cancel');
+      const { cancelJob, clearJobSignal } = require('../services/scraper/shovels.service');
+      cancelJob(data.jobId);
+
+      try {
+        const search = await prisma.permitSearch.findUnique({ where: { id: data.jobId }, select: { status: true } });
+        if (search && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(search.status)) {
+          await prisma.permitSearch.update({
+            where: { id: data.jobId },
+            data: { status: 'CANCELLED' },
+          });
+        }
+      } catch (err) {
+        logger.error({ err, jobId: data.jobId }, 'Failed to update DB status on job cancel');
+      }
+
+      const room = `chat:${data.conversationId}`;
+      io?.to(room).emit(WSEventType.JOB_FAILED, {
+        jobId: data.jobId,
+        jobType: 'permit:search',
+        status: 'cancelled',
+        result: { message: 'Search cancelled by user' },
+        timestamp: new Date().toISOString(),
+      });
+
+      setTimeout(() => clearJobSignal(data.jobId), 2000);
+    });
+
     // Handle ping for connection health
     socket.on('ping', () => {
       socket.emit('pong', { timestamp: Date.now() });
     });
 
-    socket.on('disconnect', (reason) => {
+    socket.on('disconnect', async (reason) => {
       logger.info({ socketId: socket.id, reason }, 'WebSocket client disconnected');
+      // Do NOT cancel active searches on disconnect — searches are background jobs
+      // that should complete regardless of socket lifecycle. Users can explicitly
+      // cancel via cancel_permit_search or the UI cancel button.
+      socketConversations.delete(socket.id);
     });
 
     socket.on('error', (error) => {

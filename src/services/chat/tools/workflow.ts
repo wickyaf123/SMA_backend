@@ -88,7 +88,7 @@ const definitions: ToolDefinition[] = [
 ];
 
 const handlers: Record<string, ToolHandler> = {
-  create_workflow: async (input) => {
+  create_workflow: async (input, context) => {
     // Pre-validate: check all step actions reference known tools
     const { toolDefinitions } = await import('./index');
     const knownTools = new Set(toolDefinitions.map((d) => d.name));
@@ -104,7 +104,7 @@ const handlers: Record<string, ToolHandler> = {
     }
 
     const workflow = await workflowEngine.createWorkflow({
-      conversationId: input.conversationId,
+      conversationId: context?.conversationId || input.conversationId,
       name: input.name,
       description: input.description,
       steps: steps.map((step: any) => ({

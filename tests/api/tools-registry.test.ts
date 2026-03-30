@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { toolDefinitions, executeTool } from '../../src/services/chat/tools/index';
 
 // Expected tool names in domain registration order (permit, contact, campaign, outreach, template, routing, workflow, homeowner, settings)
-const EXPECTED_PERMIT_TOOLS = ['search_permits', 'get_permit_searches', 'lookup_geo_id', 'get_pipeline_status'];
+const EXPECTED_PERMIT_TOOLS = ['search_permits', 'get_permit_searches', 'lookup_geo_id', 'get_pipeline_status', 'cancel_permit_search'];
 const EXPECTED_CONTACT_TOOLS = [
   'list_contacts', 'get_contact', 'create_contact', 'update_contact', 'delete_contact',
   'get_contact_stats', 'get_contact_replies', 'get_contact_activity',
@@ -38,8 +38,8 @@ const ALL_EXPECTED_TOOLS = [
 ];
 
 describe('Tool Registry', () => {
-  it('should have all 61 tools registered', () => {
-    expect(toolDefinitions.length).toBe(61);
+  it('should have all 62 tools registered', () => {
+    expect(toolDefinitions.length).toBe(62);
   });
 
   it('should have unique tool names', () => {

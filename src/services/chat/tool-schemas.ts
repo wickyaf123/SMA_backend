@@ -19,7 +19,7 @@ const coerceInt = (min?: number, max?: number) => {
 
 // Tool input schemas -- one per registered tool (61 total)
 const toolSchemas: Record<string, z.ZodSchema> = {
-  // ── permit.ts (4 tools) ──────────────────────────────────────────────
+  // ── permit.ts (5 tools) ──────────────────────────────────────────────
 
   search_permits: z.object({
     permitType: z.string().min(1).max(100),
@@ -42,6 +42,10 @@ const toolSchemas: Record<string, z.ZodSchema> = {
   }),
 
   get_pipeline_status: z.object({}),
+
+  cancel_permit_search: z.object({
+    searchId: z.string().uuid('Must be a valid UUID').optional(),
+  }),
 
   // ── contact.ts (18 tools) ────────────────────────────────────────────
 
@@ -162,7 +166,7 @@ const toolSchemas: Record<string, z.ZodSchema> = {
     state: z.string().max(50).nullish(),
   }),
 
-  // ── campaign.ts (7 tools) ────────────────────────────────────────────
+  // ── campaign.ts (6 tools) ────────────────────────────────────────────
 
   list_campaigns: z.object({
     status: z.string().max(50).nullish(),
@@ -193,10 +197,6 @@ const toolSchemas: Record<string, z.ZodSchema> = {
 
   sync_campaigns: z.object({}),
 
-  batch_enroll_contacts: z.object({
-    campaignId: uuidField,
-    contactIds: z.array(uuidField).min(1).max(500),
-  }),
 
   // ── outreach.ts (1 tool) ─────────────────────────────────────────────
 

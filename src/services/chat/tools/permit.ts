@@ -3,7 +3,7 @@ import { prisma } from '../../../config/database';
 import { logger } from '../../../utils/logger';
 import { config } from '../../../config';
 import { permitPipelineService } from '../../permit/permit-pipeline.service';
-import { shovelsScraperService } from '../../scraper/shovels.service';
+import { shovelsScraperService, cancelJob, clearJobSignal } from '../../scraper/shovels.service';
 import { lookupGeoId } from '../../../data/geo-ids';
 import { emitJobToConversation, WSEventType } from '../../../config/websocket';
 import { realtimeEmitter } from '../../realtime/event-emitter.service';
@@ -60,7 +60,7 @@ const definitions: ToolDefinition[] = [
         status: {
           type: 'string',
           description:
-            'Filter by status (PENDING, SEARCHING, ENRICHING, COMPLETED, FAILED)',
+            'Filter by status (PENDING, SEARCHING, ENRICHING, COMPLETED, FAILED, CANCELLED)',
         },
       },
     },
@@ -84,6 +84,20 @@ const definitions: ToolDefinition[] = [
     input_schema: {
       type: 'object',
       properties: {},
+    },
+  },
+  {
+    name: 'cancel_permit_search',
+    description:
+      'Cancel one or more active permit searches. Stops the scraping process and marks the search as cancelled. Can cancel a specific search by ID, or cancel all active searches for the current conversation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        searchId: {
+          type: 'string',
+          description: 'Specific permit search ID to cancel. If omitted, cancels ALL active searches in the current conversation.',
+        },
+      },
     },
   },
 ];
@@ -177,6 +191,33 @@ const handlers: Record<string, ToolHandler> = {
         );
       }
 
+      if (result.wasCancelled) {
+        const current = await prisma.permitSearch.findUnique({ where: { id: search.id }, select: { status: true } });
+        if (current?.status !== 'CANCELLED') {
+          await prisma.permitSearch.update({
+            where: { id: search.id },
+            data: { status: 'CANCELLED', totalFound: result.totalImported },
+          });
+        }
+        realtimeEmitter.emitJobEvent({
+          jobId: search.id,
+          jobType: 'permit:search',
+          status: 'failed',
+          result: { message: 'Search cancelled by user', total: result.totalImported },
+        });
+        if (search.conversationId) {
+          emitJobToConversation(search.conversationId, WSEventType.JOB_FAILED, {
+            jobId: search.id,
+            jobType: 'permit:search',
+            status: 'cancelled',
+            result: { message: 'Search cancelled by user', total: result.totalImported },
+          });
+        }
+        clearJobSignal(search.id);
+        logger.info({ searchId: search.id, imported: result.totalImported }, 'Permit search cancelled — skipping enrichment');
+        return;
+      }
+
       if (result.totalScraped === 0) {
         const baseMsg = result.errors.length > 0
           ? `Search failed: ${result.errors.join('; ')}`
@@ -212,23 +253,11 @@ const handlers: Record<string, ToolHandler> = {
         return;
       }
 
-      // Scraping done — atomically link contacts and update status to prevent race conditions
-      await prisma.$transaction(async (tx) => {
-        await tx.permitSearch.update({
-          where: { id: search.id },
-          data: { status: 'ENRICHING', totalFound: result.totalImported },
-        });
-
-        await tx.contact.updateMany({
-          where: {
-            source: 'shovels',
-            permitType: input.permitType,
-            permitCity: cityName,
-            permitSearchId: null,
-            createdAt: { gte: new Date(Date.now() - config.defaults.contactFreshnessWindowMs) },
-          },
-          data: { permitSearchId: search.id },
-        });
+      // Scraping done — contacts are already linked to search.id at creation time (via importContact).
+      // Just update the search status.
+      await prisma.permitSearch.update({
+        where: { id: search.id },
+        data: { status: 'ENRICHING', totalFound: result.totalImported },
       });
 
       if (search.conversationId) {
@@ -392,12 +421,92 @@ const handlers: Record<string, ToolHandler> = {
           pipelineEnabled: settings?.pipelineEnabled ?? false,
           emailOutreachEnabled: settings?.emailOutreachEnabled ?? false,
           smsOutreachEnabled: settings?.smsOutreachEnabled ?? false,
+          linkedinGloballyEnabled: settings?.linkedinGloballyEnabled ?? false,
           schedulerEnabled: settings?.schedulerEnabled ?? false,
           scrapeJobEnabled: settings?.scrapeJobEnabled ?? false,
+          shovelsJobEnabled: settings?.shovelsJobEnabled ?? false,
+          homeownerJobEnabled: settings?.homeownerJobEnabled ?? false,
+          connectionJobEnabled: settings?.connectionJobEnabled ?? false,
           enrichJobEnabled: settings?.enrichJobEnabled ?? false,
+          mergeJobEnabled: settings?.mergeJobEnabled ?? true,
+          validateJobEnabled: settings?.validateJobEnabled ?? true,
+          enrollJobEnabled: settings?.enrollJobEnabled ?? true,
         },
         latestMetrics: recentMetrics,
         activeSearches: recentSearches,
+      },
+    };
+  },
+
+  cancel_permit_search: async (input, context) => {
+    const searchId = input.searchId;
+    const conversationId = context?.conversationId;
+
+    let searches;
+    if (searchId) {
+      const search = await prisma.permitSearch.findUnique({ where: { id: searchId } });
+      if (!search) {
+        return { success: false, error: `Permit search ${searchId} not found`, code: 'VALIDATION' };
+      }
+      if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(search.status)) {
+        return {
+          success: true,
+          data: { message: `Search ${searchId} is already ${search.status.toLowerCase()}, no action needed.`, searchId, status: search.status },
+        };
+      }
+      searches = [search];
+    } else if (conversationId) {
+      searches = await prisma.permitSearch.findMany({
+        where: {
+          conversationId,
+          status: { in: ['PENDING', 'SEARCHING', 'ENRICHING'] },
+        },
+      });
+    } else {
+      return { success: false, error: 'Please specify a searchId or use this within a conversation so I know which searches to cancel.', code: 'VALIDATION' as ToolErrorCode };
+    }
+
+    if (searches.length === 0) {
+      return { success: true, data: { message: 'No active permit searches found to cancel.', cancelled: 0 } };
+    }
+
+    const cancelled: string[] = [];
+    for (const search of searches) {
+      cancelJob(search.id);
+
+      await prisma.permitSearch.update({
+        where: { id: search.id },
+        data: { status: 'CANCELLED' },
+      });
+
+      realtimeEmitter.emitJobEvent({
+        jobId: search.id,
+        jobType: 'permit:search',
+        status: 'failed',
+        result: { message: 'Search cancelled by user' },
+      });
+
+      if (search.conversationId) {
+        emitJobToConversation(search.conversationId, WSEventType.JOB_FAILED, {
+          jobId: search.id,
+          jobType: 'permit:search',
+          status: 'cancelled',
+          result: { message: 'Search cancelled by user' },
+        });
+      }
+
+      // Signal cleanup is handled by the scraper when it detects cancellation (L216).
+      // Do NOT clear here — the scraper checks asynchronously and would miss the signal.
+      cancelled.push(search.id);
+      logger.info({ searchId: search.id }, 'Permit search cancelled via tool');
+    }
+
+    return {
+      success: true,
+      data: {
+        message: `Successfully cancelled ${cancelled.length} permit search(es).`,
+        cancelled: cancelled.length,
+        searchIds: cancelled,
       },
     };
   },

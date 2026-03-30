@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { clayClient } from '../../integrations/clay/client';
-import { clayEnrichmentService } from '../../services/enrichment/clay.service';
+import { permitPipelineService } from '../../services/permit/permit-pipeline.service';
 import { logger } from '../../utils/logger';
 
 export async function handleClayWebhook(req: Request, res: Response) {
@@ -21,7 +21,7 @@ export async function handleClayWebhook(req: Request, res: Response) {
       return;
     }
 
-    await clayEnrichmentService.handleWebhookCallback({ contactId, email, phone });
+    await permitPipelineService.handleClayCallback(contactId, { email, phone });
   } catch (error: any) {
     logger.error({ error: error.message }, 'Clay webhook processing failed');
   }

@@ -19,6 +19,7 @@ import { logger } from '../utils/logger';
 import { cronToHuman } from '../config/schedule-templates';
 import { scraperQueue, campaignQueue, leadProcessingQueue } from './queues';
 import { realtimeEmitter } from '../services/realtime/event-emitter.service';
+import { permitPipelineService } from '../services/permit/permit-pipeline.service';
 
 import type { JobType } from '../services/job-log.service';
 
@@ -106,6 +107,12 @@ export class JobScheduler {
           return { success: true, skipped: true };
         }
         return await autoEnrollJob.run({ batchSize: 50 });
+      });
+
+      // Recover permit searches stuck in ENRICHING for >30 minutes
+      await this.scheduleJob('permit-recovery', '*/15 * * * *', 'PERMIT_RECOVERY', async () => {
+        const recovered = await permitPipelineService.recoverStuckSearches();
+        return { success: true, totalRecords: recovered, contactsProcessed: recovered };
       });
 
       this.isInitialized = true;
@@ -303,27 +310,44 @@ export class JobScheduler {
       return await this.addJobToQueue(jobName);
     }
 
-    // Direct execution (synchronous)
-    switch (jobName) {
-      case 'shovels':
-        return await shovelsScraperJob.run({ useSettings: true });
-      case 'homeowner':
-        return await homeownerScraperJob.run({ useSettings: true });
-      case 'connection': {
-        const settings = await settingsService.getSettings();
-        return await connectionJob.run({ batchSize: settings.connectionBatchSize ?? 50 });
+    // Direct execution with logging (wraps in runJobWithLogging for ImportJob tracking)
+    const jobTypeMap: Record<string, string> = {
+      shovels: 'SHOVELS_SCRAPE',
+      homeowner: 'HOMEOWNER_SCRAPE',
+      connection: 'CONNECTION_RESOLVE',
+      enrich: 'ENRICH',
+      merge: 'MERGE',
+      validate: 'VALIDATE',
+      enroll: 'AUTO_ENROLL',
+    };
+
+    const jobType = jobTypeMap[jobName];
+    if (!jobType) throw new Error(`Unknown job: ${jobName}`);
+
+    const getJobFn = async () => {
+      switch (jobName) {
+        case 'shovels':
+          return shovelsScraperJob.run({ useSettings: true });
+        case 'homeowner':
+          return homeownerScraperJob.run({ useSettings: true });
+        case 'connection': {
+          const settings = await settingsService.getSettings();
+          return connectionJob.run({ batchSize: settings.connectionBatchSize ?? 50 });
+        }
+        case 'enrich':
+          return enrichJob.run({ batchSize: 50, onlyNew: true });
+        case 'merge':
+          return mergeJob.run({});
+        case 'validate':
+          return validateJob.run({ batchSize: 50 });
+        case 'enroll':
+          return autoEnrollJob.run({ batchSize: 50 });
+        default:
+          throw new Error(`Unknown job: ${jobName}`);
       }
-      case 'enrich':
-        return await enrichJob.run({ batchSize: 50, onlyNew: true });
-      case 'merge':
-        return await mergeJob.run({});
-      case 'validate':
-        return await validateJob.run({ batchSize: 50 });
-      case 'enroll':
-        return await autoEnrollJob.run({ batchSize: 50 });
-      default:
-        throw new Error(`Unknown job: ${jobName}`);
-    }
+    };
+
+    return await this.runJobWithLogging(jobType as any, getJobFn);
   }
 
   /**

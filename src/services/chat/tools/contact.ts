@@ -306,17 +306,21 @@ const handlers: Record<string, ToolHandler> = {
     const skip = (page - 1) * limit;
     const where: Record<string, any> = {};
 
+    const andConditions: Record<string, any>[] = [];
+
     if (input.search) {
-      where.OR = [
-        { firstName: { contains: input.search, mode: 'insensitive' } },
-        { lastName: { contains: input.search, mode: 'insensitive' } },
-        { email: { contains: input.search, mode: 'insensitive' } },
-        {
-          company: {
-            name: { contains: input.search, mode: 'insensitive' },
+      andConditions.push({
+        OR: [
+          { firstName: { contains: input.search, mode: 'insensitive' } },
+          { lastName: { contains: input.search, mode: 'insensitive' } },
+          { email: { contains: input.search, mode: 'insensitive' } },
+          {
+            company: {
+              name: { contains: input.search, mode: 'insensitive' },
+            },
           },
-        },
-      ];
+        ],
+      });
     }
     if (input.status) where.status = input.status;
     if (input.city) where.city = input.city;
@@ -329,18 +333,22 @@ const handlers: Record<string, ToolHandler> = {
     if (input.emailValidationStatus) where.emailValidationStatus = input.emailValidationStatus;
     if (input.phoneValidationStatus) where.phoneValidationStatus = input.phoneValidationStatus;
 
-    // Data quality filter handling
+    // Data quality filter handling — uses andConditions to avoid overwriting search
     if (input.filter === 'missing_email') {
-      where.OR = [
-        { email: null },
-        { email: '' },
-      ];
+      andConditions.push({
+        OR: [
+          { email: null },
+          { email: '' },
+        ],
+      });
     } else if (input.filter === 'invalid_phone') {
-      where.OR = [
-        { phone: null },
-        { phone: '' },
-        { phoneValidationStatus: 'INVALID' },
-      ];
+      andConditions.push({
+        OR: [
+          { phone: null },
+          { phone: '' },
+          { phoneValidationStatus: 'INVALID' },
+        ],
+      });
     } else if (input.filter === 'duplicates') {
       const duplicateEmails = await prisma.$queryRaw<{ email: string }[]>`
         SELECT email FROM "Contact"
@@ -388,6 +396,10 @@ const handlers: Record<string, ToolHandler> = {
       }
 
       where.id = { in: ids };
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
     }
 
     const [contacts, total] = await Promise.all([
@@ -788,58 +800,34 @@ const handlers: Record<string, ToolHandler> = {
       return { success: false, error: 'Maximum 100 contacts per batch', code: 'VALIDATION' as ToolErrorCode };
     }
 
-    let created = 0;
-    let skipped = 0;
-    const errors: string[] = [];
+    const validContacts = contacts.filter((c: any) => c.email);
+    const missingEmail = contacts.length - validContacts.length;
 
-    for (const contact of contacts) {
-      try {
-        if (!contact.email) {
-          errors.push(`Missing email for contact: ${JSON.stringify(contact)}`);
-          continue;
-        }
+    const data = validContacts.map((contact: any) => ({
+      email: contact.email.toLowerCase().trim(),
+      firstName: contact.firstName || null,
+      lastName: contact.lastName || null,
+      fullName: [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null,
+      phone: contact.phone || null,
+      title: contact.title || null,
+      city: contact.city || null,
+      state: contact.state || null,
+      tags: contact.tags || [],
+      source: 'batch_import',
+    }));
 
-        // Check for existing contact
-        const existing = await prisma.contact.findUnique({
-          where: { email: contact.email.toLowerCase().trim() },
-        });
-
-        if (existing) {
-          skipped++;
-          continue;
-        }
-
-        await prisma.contact.create({
-          data: {
-            email: contact.email.toLowerCase().trim(),
-            firstName: contact.firstName || null,
-            lastName: contact.lastName || null,
-            fullName: [contact.firstName, contact.lastName].filter(Boolean).join(' ') || null,
-            phone: contact.phone || null,
-            title: contact.title || null,
-            city: contact.city || null,
-            state: contact.state || null,
-            tags: contact.tags || [],
-            source: 'batch_import',
-          },
-        });
-        created++;
-      } catch (err: any) {
-        if (err.code === 'P2002') {
-          skipped++;
-        } else {
-          errors.push(`Error creating ${contact.email}: ${err.message}`);
-        }
-      }
-    }
+    const result = await prisma.contact.createMany({
+      data,
+      skipDuplicates: true,
+    });
 
     return {
       success: true,
       data: {
         total: contacts.length,
-        created,
-        skipped,
-        errors: errors.length > 0 ? errors : undefined,
+        created: result.count,
+        skipped: validContacts.length - result.count,
+        errors: missingEmail > 0 ? [`${missingEmail} contact(s) skipped due to missing email`] : undefined,
       },
     };
   },

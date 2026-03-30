@@ -84,6 +84,7 @@ export interface HomeownerScraperSettings {
   realieEnrich: boolean;
   useShovelsGeoIds: boolean;
   fetchPermitDetails: boolean;
+  realieFallback: boolean;
 }
 
 export class SettingsService {
@@ -346,6 +347,7 @@ export class SettingsService {
       realieEnrich: settings.homeownerRealieEnrich ?? true,
       useShovelsGeoIds: settings.homeownerUseShovelsGeoIds ?? true,
       fetchPermitDetails: settings.homeownerFetchPermitDetails ?? true,
+      realieFallback: settings.homeownerRealieFallback ?? true,
     };
   }
 
@@ -362,6 +364,7 @@ export class SettingsService {
           homeownerRealieEnrich: data.realieEnrich,
           homeownerUseShovelsGeoIds: data.useShovelsGeoIds,
           homeownerFetchPermitDetails: data.fetchPermitDetails,
+          homeownerRealieFallback: data.realieFallback,
           updatedAt: new Date(),
         },
       });
@@ -590,6 +593,10 @@ export class SettingsService {
         emailOutreachEnabled: false,
         smsOutreachEnabled: false,
         linkedinGloballyEnabled: false,
+        schedulerEnabled: false,
+        enrichJobEnabled: false,
+        mergeJobEnabled: false,
+        validateJobEnabled: false,
         enrollJobEnabled: false,
         shovelsJobEnabled: false,
         homeownerJobEnabled: false,
@@ -600,7 +607,28 @@ export class SettingsService {
       },
     });
 
-    logger.warn('Emergency stop completed - All outreach disabled');
+    // Cancel all in-memory scraper jobs
+    try {
+      const { cancelJob } = await import('../scraper/shovels.service');
+      const activeSearches = await prisma.permitSearch.findMany({
+        where: { status: { in: ['PENDING', 'SEARCHING', 'ENRICHING'] } },
+        select: { id: true },
+      });
+      for (const search of activeSearches) {
+        cancelJob(search.id);
+        await prisma.permitSearch.update({
+          where: { id: search.id },
+          data: { status: 'CANCELLED' },
+        }).catch(() => {});
+      }
+      if (activeSearches.length > 0) {
+        logger.warn({ count: activeSearches.length }, 'Cancelled active scraper jobs');
+      }
+    } catch (err) {
+      logger.error({ err }, 'Failed to cancel active scraper jobs during emergency stop');
+    }
+
+    logger.warn('Emergency stop completed - All outreach and jobs disabled');
     return this.getPipelineControls();
   }
 
@@ -618,12 +646,15 @@ export class SettingsService {
         pipelineEnabled: true,
         emailOutreachEnabled: true,
         smsOutreachEnabled: true,
+        linkedinGloballyEnabled: true,
         schedulerEnabled: true,
         enrichJobEnabled: true,
         mergeJobEnabled: true,
         validateJobEnabled: true,
         enrollJobEnabled: true,
         shovelsJobEnabled: true,
+        homeownerJobEnabled: true,
+        connectionJobEnabled: true,
         maintenanceMode: false,
         updatedAt: new Date(),
       },

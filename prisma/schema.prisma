@@ -9,16 +9,16 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  email         String    @unique
-  passwordHash  String
-  firstName     String?
-  lastName      String?
-  role          UserRole  @default(USER)
-  isActive      Boolean   @default(true)
-  lastLoginAt   DateTime? @db.Timestamptz(6)
-  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt     DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  id           String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  email        String    @unique
+  passwordHash String
+  firstName    String?
+  lastName     String?
+  role         UserRole  @default(USER)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime? @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
 
   @@index([email])
 }
@@ -58,88 +58,88 @@ model Company {
 }
 
 model Contact {
-  id                    String                @id @default(dbgenerated("(gen_random_uuid())::text"))
-  email                 String?               @unique
-  firstName             String?
-  lastName              String?
-  fullName              String?
-  phone                 String?
-  phoneFormatted        String?
-  title                 String?
-  linkedinUrl           String?
-  linkedinId            String?
-  timezone              String?
-  city                  String?
-  state                 String?
-  country               String?
-  companyId             String?
-  status                ContactStatus         @default(NEW)
-  emailValidationStatus EmailValidationStatus @default(PENDING)
-  emailValidationAttempts Int                 @default(0)
-  phoneValidationStatus PhoneValidationStatus @default(PENDING)
-  emailValidatedAt      DateTime?             @db.Timestamptz(6)
-  phoneValidatedAt      DateTime?             @db.Timestamptz(6)
-  source                String?
-  sourceId              String?
-  apolloId              String?               @unique
-  hasReplied            Boolean               @default(false)
-  repliedAt             DateTime?             @db.Timestamptz(6)
-  repliedChannel        OutreachChannel?
-  tags                  String[]              @default([])
-  customFields          Json?
-  enrichmentData        Json?
-  createdAt             DateTime              @default(now()) @db.Timestamptz(6)
-  updatedAt             DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
-  lastContactedAt       DateTime?             @db.Timestamptz(6)
-  ghlContactId          String?               @unique
-  ghlConversationId     String?
-  dataSources           String[]              @default([])
-  dataQuality           Int?                  @default(0)
-  apifyId               String?               @unique
-  hunterEnrichedAt      DateTime?
-  hunterScore           Int?
-  shovelsContractorId   String?
-  shovelsEmployeeId     String?
-  permitType            String?
-  permitCity            String?
-  licenseNumber         String?
-  permitSearchId        String?
+  id                      String                @id @default(dbgenerated("(gen_random_uuid())::text"))
+  email                   String?               @unique
+  firstName               String?
+  lastName                String?
+  fullName                String?
+  phone                   String?
+  phoneFormatted          String?
+  title                   String?
+  linkedinUrl             String?
+  linkedinId              String?
+  timezone                String?
+  city                    String?
+  state                   String?
+  country                 String?
+  companyId               String?
+  status                  ContactStatus         @default(NEW)
+  emailValidationStatus   EmailValidationStatus @default(PENDING)
+  emailValidationAttempts Int                   @default(0)
+  phoneValidationStatus   PhoneValidationStatus @default(PENDING)
+  emailValidatedAt        DateTime?             @db.Timestamptz(6)
+  phoneValidatedAt        DateTime?             @db.Timestamptz(6)
+  source                  String?
+  sourceId                String?
+  apolloId                String?               @unique
+  hasReplied              Boolean               @default(false)
+  repliedAt               DateTime?             @db.Timestamptz(6)
+  repliedChannel          OutreachChannel?
+  tags                    String[]              @default([])
+  customFields            Json?
+  enrichmentData          Json?
+  createdAt               DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt               DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+  lastContactedAt         DateTime?             @db.Timestamptz(6)
+  ghlContactId            String?               @unique
+  ghlConversationId       String?
+  dataSources             String[]              @default([])
+  dataQuality             Int?                  @default(0)
+  apifyId                 String?               @unique
+  hunterEnrichedAt        DateTime?
+  hunterScore             Int?
+  shovelsContractorId     String?
+  shovelsEmployeeId       String?
+  permitType              String?
+  permitCity              String?
+  licenseNumber           String?
+  permitSearchId          String?
 
   // Promoted permit fields (for Instantly personalization)
-  permitDate            String?
-  permitDateFriendly    String?
-  permitMonthsAgo       Int?
-  permitDescription     String?
-  permitStatus          String?
-  permitNumber          String?
-  permitJobValue        Float?
-  permitFees            Float?
-  permitJurisdiction    String?
+  permitDate         String?
+  permitDateFriendly String?
+  permitMonthsAgo    Int?
+  permitDescription  String?
+  permitStatus       String?
+  permitNumber       String?
+  permitJobValue     Float?
+  permitFees         Float?
+  permitJurisdiction String?
 
   // Promoted contractor fields
-  avgJobValue           Float?
-  totalJobValue         Float?
-  permitCount           Int?
-  revenue               String?
-  employeeCount         String?
-  website               String?
-  rating                Float?
-  reviewCount           Int?
-  seniorityLevel        String?
-  department            String?
-  tagTally              Json?
-  clayEnrichmentStatus  ClayStatus            @default(PENDING)
-  clayEnrichedAt        DateTime?             @db.Timestamptz(6)
-  googlePlaceId         String?               @unique
-  activityLogs          ActivityLog[]
-  campaignEnrollments   CampaignEnrollment[]
-  company               Company?              @relation(fields: [companyId], references: [id])
-  linkedInActions       LinkedInAction[]
-  outreachSteps         OutreachStep[]
-  replies               Reply[]
-  sequenceEnrollments   SequenceEnrollment[]
-  connections           Connection[]
-  labels                ContactLabel[]
+  avgJobValue          Float?
+  totalJobValue        Float?
+  permitCount          Int?
+  revenue              String?
+  employeeCount        String?
+  website              String?
+  rating               Float?
+  reviewCount          Int?
+  seniorityLevel       String?
+  department           String?
+  tagTally             Json?
+  clayEnrichmentStatus ClayStatus           @default(PENDING)
+  clayEnrichedAt       DateTime?            @db.Timestamptz(6)
+  googlePlaceId        String?              @unique
+  activityLogs         ActivityLog[]
+  campaignEnrollments  CampaignEnrollment[]
+  company              Company?             @relation(fields: [companyId], references: [id])
+  linkedInActions      LinkedInAction[]
+  outreachSteps        OutreachStep[]
+  replies              Reply[]
+  sequenceEnrollments  SequenceEnrollment[]
+  connections          Connection[]
+  labels               ContactLabel[]
 
   @@index([email])
   @@index([status])
@@ -353,24 +353,24 @@ enum ReplyClassification {
 }
 
 model Reply {
-  id              String               @id @default(dbgenerated("(gen_random_uuid())::text"))
-  contactId       String
-  channel         OutreachChannel
-  content         String?
-  subject         String?
-  externalId      String?
-  messageId       String?
-  inReplyTo       String?
-  fromAddress     String?
-  receivedAt      DateTime             @db.Timestamptz(6)
-  rawPayload      Json?
-  isProcessed     Boolean              @default(false)
-  processedAt     DateTime?            @db.Timestamptz(6)
-  createdAt       DateTime             @default(now()) @db.Timestamptz(6)
-  threadId        String?
-  classification  ReplyClassification?
-  classifiedAt    DateTime?            @db.Timestamptz(6)
-  contact         Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  id             String               @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId      String
+  channel        OutreachChannel
+  content        String?
+  subject        String?
+  externalId     String?
+  messageId      String?
+  inReplyTo      String?
+  fromAddress    String?
+  receivedAt     DateTime             @db.Timestamptz(6)
+  rawPayload     Json?
+  isProcessed    Boolean              @default(false)
+  processedAt    DateTime?            @db.Timestamptz(6)
+  createdAt      DateTime             @default(now()) @db.Timestamptz(6)
+  threadId       String?
+  classification ReplyClassification?
+  classifiedAt   DateTime?            @db.Timestamptz(6)
+  contact        Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   @@index([contactId])
   @@index([channel])
@@ -454,221 +454,222 @@ model ImportJob {
 }
 
 model Settings {
-  id                      String    @id @default(uuid())
-  linkedinGloballyEnabled Boolean   @default(true)
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @default(now()) @updatedAt
+  id                      String   @id @default(uuid())
+  linkedinGloballyEnabled Boolean  @default(true)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @default(now()) @updatedAt
   defaultEmailCampaignId  String?
   defaultSmsCampaignId    String?
-  
+
   // Apify (Google Maps) Scraper - New array-based fields
-  apifySearchTerms        String[]  @default([])
-  apifyLocations          String[]  @default([])
-  apifyIndustries         String[]  @default([])
+  apifySearchTerms        String[] @default([])
+  apifyLocations          String[] @default([])
+  apifyIndustries         String[] @default([])
   apifyMaxResults         Int?
-  apifyMinRating          Float?    @default(0)
-  apifyRequirePhone       Boolean   @default(true)
-  apifyRequireWebsite     Boolean   @default(false)
-  apifySkipClosed         Boolean   @default(true)
+  apifyMinRating          Float?   @default(0)
+  apifyRequirePhone       Boolean  @default(true)
+  apifyRequireWebsite     Boolean  @default(false)
+  apifySkipClosed         Boolean  @default(true)
   apifyLanguage           String?
   apifySearchMatching     String?
-  apifyScrapePlaceDetails Boolean   @default(false)
-  apifyScrapeContacts     Boolean   @default(false)
-  apifyScrapeReviews      Boolean   @default(false)
-  apifyMaxReviews         Int?      @default(0)
+  apifyScrapePlaceDetails Boolean  @default(false)
+  apifyScrapeContacts     Boolean  @default(false)
+  apifyScrapeReviews      Boolean  @default(false)
+  apifyMaxReviews         Int?     @default(0)
   apifyScrapeSocialMedia  Json?
-  apifyMinReviewCount     Int?      @default(0)
-  
+  apifyMinReviewCount     Int?     @default(0)
+
   // Apollo Scraper
   apolloIndustry                String?
-  apolloPersonTitles            String[]  @default([])
-  apolloLocations               String[]  @default([])
-  apolloExcludeLocations        String[]  @default([])
+  apolloPersonTitles            String[] @default([])
+  apolloLocations               String[] @default([])
+  apolloExcludeLocations        String[] @default([])
   apolloEmployeesMin            Int?
   apolloEmployeesMax            Int?
   apolloRevenueMin              Int?
   apolloRevenueMax              Int?
-  apolloEnrichLimit             Int       @default(100)
-  apolloEnrichPhones            Boolean   @default(true)
+  apolloEnrichLimit             Int      @default(100)
+  apolloEnrichPhones            Boolean  @default(true)
   apolloSearchKeywords          String?
-  apolloPersonLocations         String[]  @default([])
-  apolloPersonSeniorities       String[]  @default([])
-  apolloOrganizationKeywordTags String[]  @default([])
-  apolloNegativeKeywordTags     String[]  @default([])
-  apolloTechnologies            String[]  @default([])
-  apolloIndustryTagIds          String[]  @default([])
+  apolloPersonLocations         String[] @default([])
+  apolloPersonSeniorities       String[] @default([])
+  apolloOrganizationKeywordTags String[] @default([])
+  apolloNegativeKeywordTags     String[] @default([])
+  apolloTechnologies            String[] @default([])
+  apolloIndustryTagIds          String[] @default([])
   apolloEmployeeGrowthRate      String?
   apolloFundingStage            String?
-  apolloPage                    Int       @default(1)
-  apolloPerPage                 Int       @default(100)
-  
+  apolloPage                    Int      @default(1)
+  apolloPerPage                 Int      @default(100)
+
   // Pipeline Controls
-  pipelineEnabled         Boolean   @default(true)
-  emailOutreachEnabled    Boolean   @default(true)
-  smsOutreachEnabled      Boolean   @default(true)
-  maintenanceMode         Boolean   @default(false)
-  maintenanceMessage      String?
-  schedulerEnabled        Boolean   @default(true)
-  scrapeJobEnabled        Boolean   @default(true)
-  apolloJobEnabled        Boolean   @default(true)
-  enrichJobEnabled        Boolean   @default(true)
-  mergeJobEnabled         Boolean   @default(true)
-  validateJobEnabled      Boolean   @default(true)
-  enrollJobEnabled        Boolean   @default(true)
-  lastEmergencyStopAt     DateTime? @db.Timestamp(6)
-  lastEmergencyStopBy     String?
-  
+  pipelineEnabled      Boolean   @default(true)
+  emailOutreachEnabled Boolean   @default(true)
+  smsOutreachEnabled   Boolean   @default(true)
+  maintenanceMode      Boolean   @default(false)
+  maintenanceMessage   String?
+  schedulerEnabled     Boolean   @default(true)
+  scrapeJobEnabled     Boolean   @default(true)
+  apolloJobEnabled     Boolean   @default(true)
+  enrichJobEnabled     Boolean   @default(true)
+  mergeJobEnabled      Boolean   @default(true)
+  validateJobEnabled   Boolean   @default(true)
+  enrollJobEnabled     Boolean   @default(true)
+  lastEmergencyStopAt  DateTime? @db.Timestamp(6)
+  lastEmergencyStopBy  String?
+
   // Schedule Management
-  scheduleTemplate        String?   @default("balanced")
-  scrapeJobCron           String?   @default("0 6 * * *")
-  apolloJobCron           String?   @default("30 6 * * *")
-  enrichJobCron           String?   @default("0 8 * * *")
-  mergeJobCron            String?   @default("0 9 * * *")
-  validateJobCron         String?   @default("0 10 * * *")
-  enrollJobCron           String?   @default("0 11 * * *")
-  
+  scheduleTemplate String? @default("balanced")
+  scrapeJobCron    String? @default("0 6 * * *")
+  apolloJobCron    String? @default("30 6 * * *")
+  enrichJobCron    String? @default("0 8 * * *")
+  mergeJobCron     String? @default("0 9 * * *")
+  validateJobCron  String? @default("0 10 * * *")
+  enrollJobCron    String? @default("0 11 * * *")
+
   // Campaign Routing
-  routingFallbackBehavior String?   @default("default_campaign")
+  routingFallbackBehavior String? @default("default_campaign")
 
   // Shovels Permit Scraper
-  shovelsJobEnabled      Boolean   @default(true)
-  shovelsJobCron         String?   @default("0 7 * * *")
-  shovelsPermitTypes     String[]  @default([])
-  shovelsGeoIds          String[]  @default([])
-  shovelsLocations       String[]  @default([])
-  shovelsDateRangeDays   Int?      @default(365)
-  shovelsMaxResults      Int?      @default(100)
-  shovelsEnableEmployees Boolean   @default(true)
+  shovelsJobEnabled      Boolean  @default(true)
+  shovelsJobCron         String?  @default("0 7 * * *")
+  shovelsPermitTypes     String[] @default([])
+  shovelsGeoIds          String[] @default([])
+  shovelsLocations       String[] @default([])
+  shovelsDateRangeDays   Int?     @default(365)
+  shovelsMaxResults      Int?     @default(100)
+  shovelsEnableEmployees Boolean  @default(true)
 
   // Employee Filtering
-  shovelsEmployeeSeniorityFilter  String[]  @default(["Senior", "Executive"])
-  shovelsEmployeeDepartmentFilter String[]  @default(["Operations", "Management", "Administration"])
-  shovelsEmployeeTitleInclude     String[]  @default(["Owner", "President", "CEO", "Founder", "Director", "VP", "Vice President"])
-  shovelsEmployeeTitleExclude     String[]  @default(["Technician", "Installer", "Helper", "Laborer", "Apprentice"])
+  shovelsEmployeeSeniorityFilter  String[] @default(["Senior", "Executive"])
+  shovelsEmployeeDepartmentFilter String[] @default(["Operations", "Management", "Administration"])
+  shovelsEmployeeTitleInclude     String[] @default(["Owner", "President", "CEO", "Founder", "Director", "VP", "Vice President"])
+  shovelsEmployeeTitleExclude     String[] @default(["Technician", "Installer", "Helper", "Laborer", "Apprentice"])
 
   // Homeowner Scraper
-  homeownerJobEnabled         Boolean   @default(false)
-  homeownerJobCron            String?   @default("0 9 * * *")
-  homeownerGeoIds             String[]  @default([])
-  homeownerLocations          String[]  @default([])
-  homeownerMaxResults         Int?      @default(100)
-  homeownerRealieEnrich       Boolean   @default(true)
-  homeownerUseShovelsGeoIds   Boolean   @default(true)
-  homeownerFetchPermitDetails Boolean   @default(true)
+  homeownerJobEnabled         Boolean  @default(false)
+  homeownerJobCron            String?  @default("0 9 * * *")
+  homeownerGeoIds             String[] @default([])
+  homeownerLocations          String[] @default([])
+  homeownerMaxResults         Int?     @default(100)
+  homeownerRealieEnrich       Boolean  @default(true)
+  homeownerUseShovelsGeoIds   Boolean  @default(true)
+  homeownerFetchPermitDetails Boolean  @default(true)
+  homeownerRealieFallback     Boolean  @default(true)
 
   // Connection Resolver
-  connectionJobEnabled    Boolean   @default(false)
-  connectionJobCron       String?   @default("30 9 * * *")
-  connectionBatchSize     Int?      @default(50)
+  connectionJobEnabled Boolean @default(false)
+  connectionJobCron    String? @default("30 9 * * *")
+  connectionBatchSize  Int?    @default(50)
 
   // Permit Routing
-  permitRouteMode                String?   @default("email")
-  permitEmailCampaignId          String?
-  permitGhlWorkflowId            String?
-  permitGhlEmailReplyWorkflowId  String?
-  permitGhlSmsReplyWorkflowId    String?
-  permitSmsFallbackEnabled       Boolean   @default(true)
-  permitAutoRouteEnabled         Boolean   @default(false)
+  permitRouteMode               String? @default("email")
+  permitEmailCampaignId         String?
+  permitGhlWorkflowId           String?
+  permitGhlEmailReplyWorkflowId String?
+  permitGhlSmsReplyWorkflowId   String?
+  permitSmsFallbackEnabled      Boolean @default(true)
+  permitAutoRouteEnabled        Boolean @default(false)
 
   // SMS Fallback Delay
-  smsFallbackDelayDays    Int?      @default(5)
+  smsFallbackDelayDays Int? @default(5)
 
   // GHL Pipeline Settings
-  ghlPipelineId      String?
-  ghlDefaultStageId  String?
+  ghlPipelineId     String?
+  ghlDefaultStageId String?
 }
 
 model Homeowner {
-  id                  String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  shovelsResidentId   String    @unique
-  firstName           String?
-  lastName            String?
-  fullName            String?
-  email               String?
-  phone               String?
-  street              String?
-  city                String?
-  state               String?
-  zipCode             String?
-  county              String?
-  gender              String?
-  ageRange            String?
-  isMarried           Boolean?
-  hasChildren         Boolean?
-  incomeRange         String?
-  netWorth            String?
-  education           String?
-  homeownerFlag       String?
+  id                String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  shovelsResidentId String   @unique
+  firstName         String?
+  lastName          String?
+  fullName          String?
+  email             String?
+  phone             String?
+  street            String?
+  city              String?
+  state             String?
+  zipCode           String?
+  county            String?
+  gender            String?
+  ageRange          String?
+  isMarried         Boolean?
+  hasChildren       Boolean?
+  incomeRange       String?
+  netWorth          String?
+  education         String?
+  homeownerFlag     String?
 
-  propertyAddress     String?
-  propertyValue       String?
-  propertyType        String?
-  yearBuilt           String?
-  lotSize             String?
-  livingArea          String?
-  bedrooms            Int?
-  bathrooms           Int?
+  propertyAddress String?
+  propertyValue   String?
+  propertyType    String?
+  yearBuilt       String?
+  lotSize         String?
+  livingArea      String?
+  bedrooms        Int?
+  bathrooms       Int?
 
-  permitIds           String[]  @default([])
-  permitType          String?
-  permitCity          String?
-  geoId               String?
+  permitIds  String[] @default([])
+  permitType String?
+  permitCity String?
+  geoId      String?
 
   // Permit detail fields (fetched from Shovels permits)
-  permitDate          String?
-  permitDateFriendly  String?
-  permitMonthsAgo     Int?
-  permitDescription   String?
-  permitJobValue      Float?
-  permitStatus        String?
-  permitNumber        String?
-  permitFees          Float?
-  permitJurisdiction  String?
+  permitDate         String?
+  permitDateFriendly String?
+  permitMonthsAgo    Int?
+  permitDescription  String?
+  permitJobValue     Float?
+  permitStatus       String?
+  permitNumber       String?
+  permitFees         Float?
+  permitJurisdiction String?
 
   // Shovels contact enrichment
   shovelsContactEnriched   Boolean   @default(false)
   shovelsContactEnrichedAt DateTime? @db.Timestamptz(6)
 
   // Realie enrichment
-  realieEnriched      Boolean   @default(false)
-  realieEnrichedAt    DateTime? @db.Timestamptz(6)
-  assessedValue       Float?
-  taxAmount           Float?
-  avmValue            Float?
-  avmMin              Float?
-  avmMax              Float?
-  ownerName           String?
-  totalBedrooms       Int?
-  totalBathrooms      Float?
-  buildingArea        Float?
-  stories             Int?
-  hasPool             Boolean?
-  hasGarage           Boolean?
-  garageCount         Int?
-  fireplaceCount      Int?
-  constructionType    String?
-  roofType            String?
-  foundationType      String?
-  lienCount           Int?
-  lienBalance         Float?
-  equityEstimate      Float?
-  loanToValue         Float?
-  lastTransferDate    String?
-  lastTransferPrice   Float?
-  latitude            Float?
-  longitude           Float?
-  realieRawData       Json?
+  realieEnriched    Boolean   @default(false)
+  realieEnrichedAt  DateTime? @db.Timestamptz(6)
+  assessedValue     Float?
+  taxAmount         Float?
+  avmValue          Float?
+  avmMin            Float?
+  avmMax            Float?
+  ownerName         String?
+  totalBedrooms     Int?
+  totalBathrooms    Float?
+  buildingArea      Float?
+  stories           Int?
+  hasPool           Boolean?
+  hasGarage         Boolean?
+  garageCount       Int?
+  fireplaceCount    Int?
+  constructionType  String?
+  roofType          String?
+  foundationType    String?
+  lienCount         Int?
+  lienBalance       Float?
+  equityEstimate    Float?
+  loanToValue       Float?
+  lastTransferDate  String?
+  lastTransferPrice Float?
+  latitude          Float?
+  longitude         Float?
+  realieRawData     Json?
 
-  status              String    @default("NEW")
-  source              String    @default("shovels")
-  dataSources         String[]  @default(["SHOVELS"])
-  tags                String[]  @default([])
-  enrichmentData      Json?
+  status         String   @default("NEW")
+  source         String   @default("shovels")
+  dataSources    String[] @default(["SHOVELS"])
+  tags           String[] @default([])
+  enrichmentData Json?
 
-  createdAt           DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt           DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
 
-  connections         Connection[]
+  connections Connection[]
 
   @@index([email])
   @@index([city, state])
@@ -680,20 +681,20 @@ model Homeowner {
 }
 
 model Connection {
-  id                  String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  contactId           String
-  homeownerId         String
-  permitId            String
-  permitType          String?
-  permitDate          String?
-  permitJobValue      Float?
-  permitDescription   String?
-  source              String    @default("shovels")
-  createdAt           DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt           DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  id                String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  contactId         String
+  homeownerId       String
+  permitId          String
+  permitType        String?
+  permitDate        String?
+  permitJobValue    Float?
+  permitDescription String?
+  source            String   @default("shovels")
+  createdAt         DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime @default(now()) @updatedAt @db.Timestamptz(6)
 
-  contact             Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  homeowner           Homeowner @relation(fields: [homeownerId], references: [id], onDelete: Cascade)
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  homeowner Homeowner @relation(fields: [homeownerId], references: [id], onDelete: Cascade)
 
   @@unique([contactId, homeownerId, permitId])
   @@index([contactId])
@@ -705,8 +706,8 @@ model Connection {
 model ContactLabel {
   id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
   contactId String
-  name      String   // e.g. "Hot", "Warm", "Cold", "Customer", "DNC"
-  color     String?  // hex or tailwind color name
+  name      String // e.g. "Hot", "Warm", "Cold", "Customer", "DNC"
+  color     String? // hex or tailwind color name
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
@@ -825,21 +826,21 @@ model ApolloCreditUsage {
 }
 
 model PermitSearch {
-  id                   String              @id @default(dbgenerated("(gen_random_uuid())::text"))
-  permitType           String
-  city                 String
-  geoId                String
-  startDate            DateTime            @db.Date
-  endDate              DateTime            @db.Date
-  status               PermitSearchStatus  @default(PENDING)
-  totalFound           Int                 @default(0)
-  totalEnriched        Int                 @default(0)
-  totalIncomplete      Int                 @default(0)
-  googleSheetUrl       String?
-  googleSheetId        String?
-  conversationId       String?
-  createdAt            DateTime            @default(now()) @db.Timestamptz(6)
-  updatedAt            DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
+  id              String             @id @default(dbgenerated("(gen_random_uuid())::text"))
+  permitType      String
+  city            String
+  geoId           String
+  startDate       DateTime           @db.Date
+  endDate         DateTime           @db.Date
+  status          PermitSearchStatus @default(PENDING)
+  totalFound      Int                @default(0)
+  totalEnriched   Int                @default(0)
+  totalIncomplete Int                @default(0)
+  googleSheetUrl  String?
+  googleSheetId   String?
+  conversationId  String?
+  createdAt       DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
 
   @@index([status])
   @@index([createdAt])
@@ -856,6 +857,7 @@ enum PermitSearchStatus {
   ROUTING
   COMPLETED
   FAILED
+  CANCELLED
 }
 
 enum ClayStatus {
@@ -979,13 +981,13 @@ enum TemplateChannel {
 }
 
 model Conversation {
-  id                     String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  title                  String?
-  createdAt              DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt              DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
-  summary                String?
-  lastSummarizedAtCount  Int       @default(0)
-  messages               Message[]
+  id                    String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  title                 String?
+  createdAt             DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  summary               String?
+  lastSummarizedAtCount Int       @default(0)
+  messages              Message[]
 }
 
 model Message {
@@ -1008,27 +1010,27 @@ model MessageFeedback {
   id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
   messageId String   @unique
   message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  rating    String   // 'up' | 'down'
+  rating    String // 'up' | 'down'
   comment   String?
   createdAt DateTime @default(now()) @db.Timestamptz(6)
 }
 
 model Workflow {
-  id              String         @id @default(dbgenerated("(gen_random_uuid())::text"))
-  conversationId  String?
-  name            String
-  description     String?
-  status          WorkflowStatus @default(PENDING)
-  plan            Json
-  result          Json?
-  error           String?
-  totalSteps      Int            @default(0)
-  completedSteps  Int            @default(0)
-  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
-  updatedAt       DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
-  startedAt       DateTime?      @db.Timestamptz(6)
-  completedAt     DateTime?      @db.Timestamptz(6)
-  steps           WorkflowStep[]
+  id             String         @id @default(dbgenerated("(gen_random_uuid())::text"))
+  conversationId String?
+  name           String
+  description    String?
+  status         WorkflowStatus @default(PENDING)
+  plan           Json
+  result         Json?
+  error          String?
+  totalSteps     Int            @default(0)
+  completedSteps Int            @default(0)
+  createdAt      DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
+  startedAt      DateTime?      @db.Timestamptz(6)
+  completedAt    DateTime?      @db.Timestamptz(6)
+  steps          WorkflowStep[]
 
   @@index([conversationId])
   @@index([status])
@@ -1038,7 +1040,7 @@ model Workflow {
 model WorkflowStep {
   id            String             @id @default(dbgenerated("(gen_random_uuid())::text"))
   workflowId    String
-  workflow      Workflow            @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflow      Workflow           @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   order         Int
   name          String
   action        String

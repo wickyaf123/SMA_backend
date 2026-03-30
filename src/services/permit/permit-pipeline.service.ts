@@ -1,5 +1,5 @@
 import { prisma } from '../../config/database';
-import { shovelsScraperService } from '../scraper/shovels.service';
+import { shovelsScraperService, clearJobSignal } from '../scraper/shovels.service';
 import { clayClient } from '../../integrations/clay/client';
 import { HunterEnrichmentService } from '../enrichment/hunter.service';
 import { permitSheetsService } from './sheets.service';
@@ -17,6 +17,7 @@ export interface PermitPipelineParams {
   geoId: string;
   startDate: string;
   endDate: string;
+  maxResults?: number;
   conversationId?: string;
 }
 
@@ -67,13 +68,30 @@ export class PermitPipelineService {
       : Array.isArray(geoEntry) && geoEntry.length > 0 ? geoEntry[0].stateAbbr
       : null;
 
+    const emitProgress = (event: any) => {
+      if (search.conversationId) {
+        emitJobToConversation(search.conversationId, WSEventType.JOB_PROGRESS, {
+          jobId: search.id,
+          jobType: 'permit:search',
+          status: 'progress',
+          result: { permitType: params.permitType, city: params.city, ...event },
+        });
+      }
+    };
+
+    const maxResults = Math.min(params.maxResults || 50, 500);
+
     const result = stateAbbr
       ? await shovelsScraperService.scrapeByCity(
-          params.permitType, params.city, stateAbbr, dateRangeDays, 100, true
+          params.permitType, params.city, stateAbbr, dateRangeDays, maxResults, true,
+          undefined, emitProgress, search.id
         )
       : await shovelsScraperService.scrapeByPermitTypeAndGeo(
-          params.permitType, params.geoId, params.city, dateRangeDays, 100, true
+          params.permitType, params.geoId, params.city, dateRangeDays, maxResults, true,
+          undefined, undefined, emitProgress, search.id
         );
+
+    clearJobSignal(search.id);
 
     // If the scraper returned errors and no results, mark as failed
     if (result.totalScraped === 0 && result.errors.length > 0) {
@@ -102,19 +120,31 @@ export class PermitPipelineService {
       return search.id;
     }
 
-    await prisma.permitSearch.update({
-      where: { id: search.id },
-      data: { status: 'ENRICHING', totalFound: result.totalImported },
+    // Atomically link contacts and update status to prevent race conditions
+    await prisma.$transaction(async (tx) => {
+      await tx.permitSearch.update({
+        where: { id: search.id },
+        data: { status: 'ENRICHING', totalFound: result.totalImported },
+      });
+
+      await tx.contact.updateMany({
+        where: {
+          source: 'shovels',
+          permitType: params.permitType,
+          permitCity: params.city,
+          permitSearchId: null,
+          createdAt: { gte: new Date(Date.now() - config.defaults.contactFreshnessWindowMs) },
+        },
+        data: { permitSearchId: search.id },
+      });
     });
 
-    await prisma.contact.updateMany({
-      where: {
-        source: 'shovels',
-        permitType: params.permitType,
-        permitCity: params.city,
-        createdAt: { gte: new Date(Date.now() - config.defaults.contactFreshnessWindowMs) },
-      },
-      data: { permitSearchId: search.id },
+    emitProgress({
+      phase: 'enriching',
+      imported: result.totalImported,
+      duplicates: result.duplicates,
+      filtered: result.filtered,
+      message: `Imported ${result.totalImported} contacts, enriching emails...`,
     });
 
     await this.sendToClayEnrichment(search.id);
@@ -139,9 +169,11 @@ export class PermitPipelineService {
     }
 
     if (skipClayIds.length > 0) {
-      await prisma.contact.updateMany({
-        where: { id: { in: skipClayIds } },
-        data: { clayEnrichmentStatus: 'SKIPPED' },
+      await prisma.$transaction(async (tx) => {
+        await tx.contact.updateMany({
+          where: { id: { in: skipClayIds } },
+          data: { clayEnrichmentStatus: 'SKIPPED' },
+        });
       });
       logger.info(
         { permitSearchId, skipped: skipClayIds.length },
@@ -247,6 +279,7 @@ export class PermitPipelineService {
 
     // Build a preview of top contacts for chat display
     const contactPreview = raw.slice(0, 10).map(c => ({
+      id: c.id,
       name: c.fullName || [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown',
       company: c.company?.name || '',
       email: c.email || '',
@@ -315,6 +348,32 @@ export class PermitPipelineService {
         result: completedResult,
       });
     }
+  }
+
+  async recoverStuckSearches(maxAgeMs: number = 30 * 60 * 1000): Promise<number> {
+    const cutoff = new Date(Date.now() - maxAgeMs);
+    const stuckSearches = await prisma.permitSearch.findMany({
+      where: {
+        status: 'ENRICHING',
+        updatedAt: { lt: cutoff },
+      },
+      select: { id: true },
+    });
+
+    if (stuckSearches.length === 0) return 0;
+
+    logger.info({ count: stuckSearches.length, maxAgeMs }, 'Recovering stuck ENRICHING searches');
+
+    for (const search of stuckSearches) {
+      // Mark remaining PENDING contacts as INCOMPLETE so finalization can proceed
+      await prisma.contact.updateMany({
+        where: { permitSearchId: search.id, clayEnrichmentStatus: 'PENDING' },
+        data: { clayEnrichmentStatus: 'INCOMPLETE' },
+      });
+      await this.buildSheetForSearch(search.id);
+    }
+
+    return stuckSearches.length;
   }
 
   async approveAndRoute(permitSearchId: string): Promise<{ routed: number; failed: number }> {

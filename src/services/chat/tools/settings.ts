@@ -11,9 +11,23 @@ import { getScheduler } from '../../../jobs/scheduler';
 import { contactExportService } from '../../contact/export.service';
 import { ghlClient } from '../../../integrations/ghl/client';
 
-// Ensure export directory exists on startup
+// Ensure export directory exists on startup and clean up orphaned exports from previous runs
 if (!fs.existsSync(config.defaults.exportDir)) {
   fs.mkdirSync(config.defaults.exportDir, { recursive: true });
+} else {
+  try {
+    const exportFiles = fs.readdirSync(config.defaults.exportDir);
+    const now = Date.now();
+    for (const file of exportFiles) {
+      const filePath = path.join(config.defaults.exportDir, file);
+      try {
+        const stat = fs.statSync(filePath);
+        if (now - stat.mtimeMs > 15 * 60 * 1000) {
+          fs.unlinkSync(filePath);
+        }
+      } catch {}
+    }
+  } catch {}
 }
 
 const definitions: ToolDefinition[] = [
@@ -344,13 +358,27 @@ const handlers: Record<string, ToolHandler> = {
       ...(healthScheduler ? healthScheduler.getStatus() : { isRunning: false, jobs: [] }),
     };
 
-    // Check recent job activity
+    // Check recent job activity with staleness detection
+    const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+    const now = Date.now();
     const recentJobs = await prisma.importJob.findMany({
       where: { status: 'PROCESSING' },
       select: { id: true, type: true, status: true, startedAt: true },
       take: 5,
     });
-    healthChecks.activeJobs = recentJobs;
+    healthChecks.activeJobs = recentJobs.map((job: any) => ({
+      ...job,
+      isStale: job.startedAt ? (now - new Date(job.startedAt).getTime() > STALE_THRESHOLD_MS) : false,
+    }));
+
+    // Auto-mark stale PROCESSING jobs as FAILED
+    const staleJobs = recentJobs.filter((j: any) => j.startedAt && (now - new Date(j.startedAt).getTime() > STALE_THRESHOLD_MS));
+    if (staleJobs.length > 0) {
+      await prisma.importJob.updateMany({
+        where: { id: { in: staleJobs.map((j: any) => j.id) } },
+        data: { status: 'FAILED', errors: { message: 'Job timed out (stale PROCESSING state)' } },
+      });
+    }
 
     const allHealthy = healthChecks.database.status === 'healthy' && healthChecks.redis.status === 'healthy';
 
@@ -466,8 +494,9 @@ const handlers: Record<string, ToolHandler> = {
   export_contacts: async (input) => {
     const filters: Record<string, any> = {};
     if (input.status) filters.status = [input.status];
-    if (input.city) filters.search = input.city;
-    if (input.state) filters.search = input.state;
+    if (input.city || input.state) {
+      filters.search = [input.city, input.state].filter(Boolean).join(' ');
+    }
     if (input.hasReplied !== undefined) filters.hasReplied = input.hasReplied;
     if (input.tags) filters.tags = input.tags;
 

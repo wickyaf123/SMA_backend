@@ -8,7 +8,7 @@ import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 import * as Sentry from '@sentry/node';
 
-export type JobType = 'SHOVELS_SCRAPE' | 'HOMEOWNER_SCRAPE' | 'CONNECTION_RESOLVE' | 'ENRICH' | 'MERGE' | 'VALIDATE' | 'AUTO_ENROLL';
+export type JobType = 'SHOVELS_SCRAPE' | 'HOMEOWNER_SCRAPE' | 'CONNECTION_RESOLVE' | 'ENRICH' | 'MERGE' | 'VALIDATE' | 'AUTO_ENROLL' | 'PERMIT_RECOVERY';
 export type JobStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 
 export interface JobLogData {

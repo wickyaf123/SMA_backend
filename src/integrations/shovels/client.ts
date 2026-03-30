@@ -34,7 +34,7 @@ export class ShovelsClient {
     );
   }
 
-  async searchContractors(params: Omit<ShovelsSearchParams, 'cursor'>): Promise<ShovelsContractor[]> {
+  async searchContractors(params: Omit<ShovelsSearchParams, 'cursor'>, maxResults?: number): Promise<ShovelsContractor[]> {
     const results: ShovelsContractor[] = [];
     let cursor: string | undefined;
 
@@ -44,11 +44,15 @@ export class ShovelsClient {
         { params: { ...params, cursor, size: params.size || 50 } }
       );
       results.push(...response.data.items);
+      if (maxResults && results.length >= maxResults) {
+        break;
+      }
       cursor = response.data.next_cursor ?? undefined;
     } while (cursor);
 
-    logger.info({ total: results.length, tags: params.tags, geoId: params.geo_id }, 'Shovels contractor search complete');
-    return results;
+    const trimmed = maxResults ? results.slice(0, maxResults) : results;
+    logger.info({ total: trimmed.length, tags: params.tags, geoId: params.geo_id }, 'Shovels contractor search complete');
+    return trimmed;
   }
 
   async getEmployees(contractorId: string): Promise<ShovelsEmployee[]> {

@@ -182,7 +182,7 @@ export class ChatService {
       if (totalMessageCount > 40 && (!conversation?.lastSummarizedAtCount || totalMessageCount - conversation.lastSummarizedAtCount >= 20)) {
         // Summarize the oldest messages that are being dropped
         try {
-          const oldestMessages = historyDesc.slice(Math.max(0, historyDesc.length - 20)); // oldest 20 from current window
+          const oldestMessages = historyDesc.slice(Math.max(0, historyDesc.length - 20)); // last 20 of desc = oldest 20 in current window
           const messagesForSummary = oldestMessages
             .filter(m => m.role === 'user' || m.role === 'assistant')
             .map(m => `${m.role}: ${m.content?.substring(0, 200)}`)
@@ -296,6 +296,7 @@ export class ChatService {
 
       // 5. Stream response from Claude with tool-use loop
       fullResponse = '';
+      let allStreamedText = ''; // Cumulative tracker across tool iterations (never reset)
       let continueLoop = true;
       streamedText = '';
       let toolIterations = 0;
@@ -334,6 +335,7 @@ export class ChatService {
 
         // TASK 2: Wrap stream creation + consumption in retry logic
         let currentToolCalls: any[] = [];
+        const preRetryLength = fullResponse.length;
 
         const createAndConsumeStream = async () => {
           const stream = this.getClient().messages.stream({
@@ -351,6 +353,7 @@ export class ChatService {
           stream.on('text', (text) => {
             streamedText += text;
             fullResponse += text;
+            allStreamedText += text;
             if (onToken) onToken(text);
           });
 
@@ -373,8 +376,8 @@ export class ChatService {
           },
           onRetry: (attempt, error) => {
             logger.warn({ attempt, error: error.message, conversationId }, 'Retrying Anthropic stream');
-            // Reset streaming state for retry
-            fullResponse = fullResponse.substring(0, fullResponse.length - streamedText.length);
+            // Undo partial text accumulated before the failed stream
+            fullResponse = fullResponse.substring(0, preRetryLength);
           },
         });
 
@@ -467,7 +470,7 @@ export class ChatService {
         data: {
           conversationId,
           role: 'assistant',
-          content: fullResponse || streamedText,
+          content: allStreamedText || fullResponse || streamedText,
         },
       });
 
@@ -481,7 +484,7 @@ export class ChatService {
             messages: [
               {
                 role: 'user',
-                content: `Generate a 3-6 word title for this conversation. Only output the title, nothing else.\n\nUser: ${userMessage}\nAssistant: ${fullResponse?.substring(0, 200) || streamedText?.substring(0, 200)}`,
+                content: `Generate a 3-6 word title for this conversation. Only output the title, nothing else.\n\nUser: ${userMessage}\nAssistant: ${(allStreamedText || fullResponse || streamedText)?.substring(0, 200)}`,
               },
             ],
           });
@@ -510,7 +513,7 @@ export class ChatService {
 
       this.activeStreams.delete(conversationId);
 
-      if (onDone) onDone(fullResponse);
+      if (onDone) onDone(fullResponse || allStreamedText);
 
       return savedMessage;
     } catch (error: any) {

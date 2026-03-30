@@ -17,6 +17,81 @@ export interface ShovelsRunResult {
   searchesRun: number;
   /** When scraping yields no rows, explains geo strategies tried (city slug, local zips, zippopotam). */
   diagnostics?: string;
+  /** True when the scrape was stopped early via cancelJob(). */
+  wasCancelled?: boolean;
+}
+
+export type ScrapeProgressPhase = 'searching' | 'importing' | 'enriching' | 'building_sheet';
+
+export interface ScrapeProgressEvent {
+  phase: ScrapeProgressPhase;
+  imported: number;
+  duplicates: number;
+  filtered: number;
+  totalContractors?: number;
+  contractorIndex?: number;
+  message?: string;
+}
+
+export type OnScrapeProgress = (event: ScrapeProgressEvent) => void;
+
+/**
+ * Pause/cancel signals for running permit searches.
+ * Uses Redis for persistence (survives restarts) with a local Map cache for fast reads.
+ */
+import { redis } from '../../config/redis';
+
+const JOB_SIGNAL_PREFIX = 'job:signal:';
+const JOB_SIGNAL_TTL = 3600; // 1 hour
+
+// Local write-through cache for fast synchronous reads
+const localCache = new Map<string, 'paused' | 'cancelled'>();
+
+export function pauseJob(jobId: string): void {
+  localCache.set(jobId, 'paused');
+  redis.set(`${JOB_SIGNAL_PREFIX}${jobId}`, 'paused', 'EX', JOB_SIGNAL_TTL).catch(() => {});
+}
+
+export function resumeJob(jobId: string): void {
+  localCache.delete(jobId);
+  redis.del(`${JOB_SIGNAL_PREFIX}${jobId}`).catch(() => {});
+}
+
+export function cancelJob(jobId: string): void {
+  localCache.set(jobId, 'cancelled');
+  redis.set(`${JOB_SIGNAL_PREFIX}${jobId}`, 'cancelled', 'EX', JOB_SIGNAL_TTL).catch(() => {});
+}
+
+export function getJobSignal(jobId: string): 'paused' | 'cancelled' | undefined {
+  return localCache.get(jobId);
+}
+
+export function clearJobSignal(jobId: string): void {
+  localCache.delete(jobId);
+  redis.del(`${JOB_SIGNAL_PREFIX}${jobId}`).catch(() => {});
+}
+
+/** Restore signals from Redis on startup (called once) */
+export async function restoreJobSignals(): Promise<void> {
+  try {
+    const keys = await redis.keys(`${JOB_SIGNAL_PREFIX}*`);
+    for (const key of keys) {
+      const val = await redis.get(key);
+      if (val === 'paused' || val === 'cancelled') {
+        const jobId = key.slice(JOB_SIGNAL_PREFIX.length);
+        localCache.set(jobId, val);
+      }
+    }
+  } catch {
+    // Non-fatal — signals just won't be restored
+  }
+}
+
+async function waitWhilePaused(jobId: string): Promise<boolean> {
+  while (localCache.get(jobId) === 'paused') {
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return localCache.get(jobId) === 'cancelled';
 }
 
 export class ShovelsScraperService {
@@ -28,7 +103,9 @@ export class ShovelsScraperService {
     maxResults: number,
     enableEmployees: boolean,
     employeeFilter?: EmployeeFilterConfig,
-    seenContractorIds?: Set<string>
+    seenContractorIds?: Set<string>,
+    onProgress?: OnScrapeProgress,
+    jobId?: string
   ): Promise<ShovelsRunResult> {
     const endDate = new Date().toISOString().split('T')[0];
     const startDate = new Date(Date.now() - dateRangeDays * 86400000)
@@ -38,6 +115,7 @@ export class ShovelsScraperService {
     let totalImported = 0;
     let duplicates = 0;
     let filtered = 0;
+    let wasCancelled = false;
     const errors: string[] = [];
 
     try {
@@ -77,7 +155,33 @@ export class ShovelsScraperService {
         'Shovels search returned contractors (after relevance + cross-zip dedup)'
       );
 
-      for (const contractor of contractors) {
+      const displayTotal = Math.min(contractors.length, maxResults);
+      onProgress?.({
+        phase: 'importing',
+        imported: totalImported,
+        duplicates,
+        filtered,
+        totalContractors: displayTotal,
+        contractorIndex: 0,
+        message: `Found ${displayTotal} contractors, importing contacts...`,
+      });
+
+      for (let ci = 0; ci < contractors.length; ci++) {
+        if (totalImported >= maxResults) {
+          logger.info({ totalImported, maxResults, ci, total: contractors.length }, 'Reached maxResults limit, stopping import');
+          break;
+        }
+
+        if (jobId) {
+          const cancelled = await waitWhilePaused(jobId);
+          if (cancelled) {
+            logger.info({ jobId, ci, total: contractors.length }, 'Job cancelled during import');
+            wasCancelled = true;
+            break;
+          }
+        }
+
+        const contractor = contractors[ci];
         try {
           const mostRecentPermit = await shovelsClient.getMostRecentPermit(contractor.id);
 
@@ -99,16 +203,29 @@ export class ShovelsScraperService {
 
           if (employees.length > 0) {
             for (const employee of employees) {
+              if (totalImported >= maxResults) break;
               const normalized = normalizeEmployee(contractor, employee, { permitType, city }, mostRecentPermit);
-              const result = await this.importContact(normalized);
+              const result = await this.importContact(normalized, jobId);
               if (result === 'imported') totalImported++;
               else if (result === 'duplicate') duplicates++;
             }
           } else {
             const normalized = normalizeContractor(contractor, { permitType, city }, mostRecentPermit);
-            const result = await this.importContact(normalized);
+            const result = await this.importContact(normalized, jobId);
             if (result === 'imported') totalImported++;
             else if (result === 'duplicate') duplicates++;
+          }
+
+          if ((ci + 1) % 3 === 0 || ci === contractors.length - 1) {
+            onProgress?.({
+              phase: 'importing',
+              imported: totalImported,
+              duplicates,
+              filtered,
+              totalContractors: displayTotal,
+              contractorIndex: Math.min(ci + 1, displayTotal),
+              message: `Processing contractor ${Math.min(ci + 1, displayTotal)} of ${displayTotal}...`,
+            });
           }
         } catch (err: any) {
           if (err.code === 'P2002') {
@@ -123,8 +240,8 @@ export class ShovelsScraperService {
       logger.error({ err: err.message, permitType, geoId }, 'Shovels search failed');
     }
 
-    logger.info({ totalScraped, totalImported, duplicates, filtered, errors: errors.length }, 'Shovels scrape complete');
-    return { success: errors.length === 0, totalScraped, totalImported, duplicates, filtered, errors, searchesRun: 1 };
+    logger.info({ totalScraped, totalImported, duplicates, filtered, wasCancelled, errors: errors.length }, 'Shovels scrape complete');
+    return { success: errors.length === 0, totalScraped, totalImported, duplicates, filtered, errors, searchesRun: 1, wasCancelled };
   }
 
   private isTransientSearchError(err: any): boolean {
@@ -156,7 +273,7 @@ export class ShovelsScraperService {
     const tagged = await this.searchContractorsWithRetry({
       ...baseParams,
       tags: permitType.toLowerCase(),
-    });
+    }, maxResults);
 
     if (tagged.length > 0) {
       logger.info(
@@ -171,7 +288,7 @@ export class ShovelsScraperService {
       { permitType, geoId },
       'Tag search returned 0 results, retrying without tag (broad geo search)'
     );
-    const untagged = await this.searchContractorsWithRetry(baseParams);
+    const untagged = await this.searchContractorsWithRetry(baseParams, maxResults);
     logger.info(
       { permitType, geoId, count: untagged.length },
       'Tagless fallback search returned results'
@@ -181,14 +298,15 @@ export class ShovelsScraperService {
 
   /** Retries up to 2 times (3 attempts total) with 2s then 4s backoff on transient API failures. */
   private async searchContractorsWithRetry(
-    params: Omit<ShovelsSearchParams, 'cursor'>
+    params: Omit<ShovelsSearchParams, 'cursor'>,
+    maxResults?: number
   ): Promise<Awaited<ReturnType<typeof shovelsClient.searchContractors>>> {
     const maxAttempts = 3;
     const backoffMs = [2000, 4000];
     let lastErr: any;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        return await shovelsClient.searchContractors(params);
+        return await shovelsClient.searchContractors(params, maxResults);
       } catch (err: any) {
         lastErr = err;
         const transient = this.isTransientSearchError(err);
@@ -212,7 +330,7 @@ export class ShovelsScraperService {
     throw lastErr;
   }
 
-  private async importContact(normalized: any): Promise<'imported' | 'duplicate' | 'skipped'> {
+  private async importContact(normalized: any, permitSearchId?: string): Promise<'imported' | 'duplicate' | 'skipped'> {
     if (!normalized.email && !normalized.phone) return 'skipped';
 
     try {
@@ -316,6 +434,7 @@ export class ShovelsScraperService {
           tagTally: normalized.tagTally || undefined,
           enrichmentData: normalized.enrichmentData,
           companyId: company.id,
+          permitSearchId: permitSearchId || null,
           dataSources: ['SHOVELS'],
           tags: [
             ...(normalized.email ? [] : ['no_individual_contact']),
@@ -384,6 +503,7 @@ export class ShovelsScraperService {
       merged.filtered += p.filtered;
       merged.errors.push(...p.errors);
       merged.searchesRun += p.searchesRun;
+      if (p.wasCancelled) merged.wasCancelled = true;
     }
     merged.success = merged.errors.length === 0;
     return merged;
@@ -399,7 +519,9 @@ export class ShovelsScraperService {
     maxResults: number,
     enableEmployees: boolean,
     employeeFilter?: EmployeeFilterConfig,
-    seenContractorIds?: Set<string>
+    seenContractorIds?: Set<string>,
+    onProgress?: OnScrapeProgress,
+    jobId?: string
   ): Promise<ShovelsRunResult> {
     const totals: ShovelsRunResult = {
       success: true,
@@ -413,18 +535,49 @@ export class ShovelsScraperService {
     const seen = seenContractorIds ?? new Set<string>();
     const perZip = Math.ceil(maxResults / Math.max(zips.length, 1));
     for (let i = 0; i < zips.length; i++) {
+      if (totals.totalImported >= maxResults) {
+        logger.info({ totalImported: totals.totalImported, maxResults, zipsSearched: i, totalZips: zips.length }, 'Reached maxResults limit across zips, stopping');
+        break;
+      }
+
+      if (jobId) {
+        const cancelled = await waitWhilePaused(jobId);
+        if (cancelled) {
+          logger.info({ jobId, zipsSearched: i, totalZips: zips.length }, 'Job cancelled between zip iterations');
+          totals.wasCancelled = true;
+          break;
+        }
+      }
+
       if (i > 0) {
         await new Promise((r) => setTimeout(r, ShovelsScraperService.ZIP_THROTTLE_MS));
       }
+
+      const remaining = maxResults - totals.totalImported;
+      const zipLimit = Math.min(perZip, remaining);
+
+      const cumulativeOnProgress: OnScrapeProgress | undefined = onProgress
+        ? (event) => {
+            onProgress({
+              ...event,
+              imported: totals.totalImported + event.imported,
+              duplicates: totals.duplicates + event.duplicates,
+              filtered: totals.filtered + event.filtered,
+            });
+          }
+        : undefined;
+
       const result = await this.scrapeByPermitTypeAndGeo(
         permitType,
         zips[i],
         cityName,
         dateRangeDays,
-        perZip,
+        zipLimit,
         enableEmployees,
         employeeFilter,
-        seen
+        seen,
+        cumulativeOnProgress,
+        jobId
       );
       totals.totalScraped += result.totalScraped;
       totals.totalImported += result.totalImported;
@@ -432,6 +585,7 @@ export class ShovelsScraperService {
       totals.filtered += result.filtered;
       totals.errors.push(...result.errors);
       totals.searchesRun += result.searchesRun;
+      if (result.wasCancelled) totals.wasCancelled = true;
     }
     totals.success = totals.errors.length === 0;
     return totals;
@@ -471,7 +625,9 @@ export class ShovelsScraperService {
     dateRangeDays: number,
     maxResults: number,
     enableEmployees: boolean,
-    employeeFilter?: EmployeeFilterConfig
+    employeeFilter?: EmployeeFilterConfig,
+    onProgress?: OnScrapeProgress,
+    jobId?: string
   ): Promise<ShovelsRunResult> {
     const diagLines: string[] = [];
     const seenContractorIds = new Set<string>();
@@ -488,9 +644,17 @@ export class ShovelsScraperService {
       diagLines.push(
         `1) Local dictionary: ${localZips.length} zip(s) [${preview}${localZips.length > 8 ? ', …' : ''}].`
       );
+      onProgress?.({
+        phase: 'searching',
+        imported: 0,
+        duplicates: 0,
+        filtered: 0,
+        message: `Searching ${localZips.length} zip codes in ${cityName}...`,
+      });
+
       const localTotals = await this.scrapeByZipGeoIds(
         permitType, localZips, cityName, dateRangeDays,
-        maxResults, enableEmployees, employeeFilter, seenContractorIds
+        maxResults, enableEmployees, employeeFilter, seenContractorIds, onProgress, jobId
       );
       accumulated = localTotals;
       diagLines.push(
@@ -515,9 +679,17 @@ export class ShovelsScraperService {
 
     if (apiZipsDeduped.length > 0) {
       diagLines.push(`2) Zippopotam.us: ${apiZipsDeduped.length} zip(s) to search (deduped vs local).`);
+      onProgress?.({
+        phase: 'searching',
+        imported: accumulated.totalImported,
+        duplicates: accumulated.duplicates,
+        filtered: accumulated.filtered,
+        message: `Expanding search to ${apiZipsDeduped.length} additional zip codes...`,
+      });
+
       const apiTotals = await this.scrapeByZipGeoIds(
         permitType, apiZipsDeduped, cityName, dateRangeDays,
-        maxResults, enableEmployees, employeeFilter, seenContractorIds
+        maxResults, enableEmployees, employeeFilter, seenContractorIds, onProgress, jobId
       );
       accumulated = this.mergeShovelsResults(accumulated, apiTotals);
       diagLines.push(
@@ -544,7 +716,7 @@ export class ShovelsScraperService {
     const cityGeoId = `${cityName.toLowerCase().replace(/\s+/g, '-')}-${stateAbbr.toLowerCase()}`;
     logger.info({ cityGeoId }, 'Zip strategies exhausted, trying city slug as last resort');
     const slugResult = await this.scrapeByPermitTypeAndGeo(
-      permitType, cityGeoId, cityName, dateRangeDays, maxResults, enableEmployees, employeeFilter, seenContractorIds
+      permitType, cityGeoId, cityName, dateRangeDays, maxResults, enableEmployees, employeeFilter, seenContractorIds, onProgress, jobId
     );
     diagLines.push(
       `3) City slug "${cityGeoId}": ${slugResult.totalScraped} raw row(s).`
