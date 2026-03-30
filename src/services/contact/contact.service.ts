@@ -425,51 +425,47 @@ export class ContactService {
    */
   public async getStatistics(): Promise<any> {
     try {
-      // Get total count
-      const total = await prisma.contact.count();
-
-      // Get counts by status
-      const byStatus = await prisma.contact.groupBy({
-        by: ['status'],
-        _count: { status: true },
-      });
-
-      // Get counts by email validation status
-      const byEmailValidation = await prisma.contact.groupBy({
-        by: ['emailValidationStatus'],
-        _count: { emailValidationStatus: true },
-      });
-
-      // Get replied count
-      const replied = await prisma.contact.count({ where: { hasReplied: true } });
-
-      // Get contacts imported today
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const importedToday = await prisma.contact.count({
-        where: {
-          createdAt: {
-            gte: today,
-          },
-        },
-      });
 
-      // Format status counts
+      const counts = await prisma.$queryRaw<Array<{
+        total: bigint;
+        replied: bigint;
+        imported_today: bigint;
+      }>>`
+        SELECT
+          COUNT(*)::bigint AS total,
+          COUNT(*) FILTER (WHERE "hasReplied" = true)::bigint AS replied,
+          COUNT(*) FILTER (WHERE "createdAt" >= ${today})::bigint AS imported_today
+        FROM "Contact"
+      `;
+
+      const byStatusRows = await prisma.$queryRaw<Array<{ status: string; cnt: bigint }>>`
+        SELECT status::text, COUNT(*)::bigint AS cnt
+        FROM "Contact"
+        GROUP BY status
+      `;
+
+      const byEmailRows = await prisma.$queryRaw<Array<{ status: string; cnt: bigint }>>`
+        SELECT "emailValidationStatus" AS status, COUNT(*)::bigint AS cnt
+        FROM "Contact"
+        GROUP BY "emailValidationStatus"
+      `;
+
+      const c = counts[0];
+      const total = Number(c.total);
+      const replied = Number(c.replied);
+
       const statusCounts: Record<string, number> = {};
-      byStatus.forEach((group) => {
-        statusCounts[group.status] = group._count.status;
-      });
+      byStatusRows.forEach((r) => { statusCounts[r.status] = Number(r.cnt); });
 
-      // Format email validation counts
       const emailValidationCounts: Record<string, number> = {};
-      byEmailValidation.forEach((group) => {
-        emailValidationCounts[group.emailValidationStatus] = group._count.emailValidationStatus;
-      });
+      byEmailRows.forEach((r) => { emailValidationCounts[r.status] = Number(r.cnt); });
 
       return {
         total,
         replied,
-        importedToday,
+        importedToday: Number(c.imported_today),
         byStatus: statusCounts,
         byEmailValidation: emailValidationCounts,
         conversionRate: total > 0 ? (replied / total) * 100 : 0,

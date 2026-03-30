@@ -91,22 +91,46 @@ export class HomeownerController {
 
   async stats(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const [total, enriched, withEmail, withPhone, byState, byCity] = await Promise.all([
-        prisma.homeowner.count(),
-        prisma.homeowner.count({ where: { realieEnriched: true } }),
-        prisma.homeowner.count({ where: { email: { not: null } } }),
-        prisma.homeowner.count({ where: { phone: { not: null } } }),
-        prisma.homeowner.groupBy({ by: ['state'], _count: true, orderBy: { _count: { state: 'desc' } }, take: 10 }),
-        prisma.homeowner.groupBy({ by: ['city'], _count: true, orderBy: { _count: { city: 'desc' } }, take: 10 }),
-      ]);
+      const counts = await prisma.$queryRaw<Array<{
+        total: bigint;
+        enriched: bigint;
+        with_email: bigint;
+        with_phone: bigint;
+      }>>`
+        SELECT
+          COUNT(*)::bigint AS total,
+          COUNT(*) FILTER (WHERE "realieEnriched" = true)::bigint AS enriched,
+          COUNT(*) FILTER (WHERE email IS NOT NULL)::bigint AS with_email,
+          COUNT(*) FILTER (WHERE phone IS NOT NULL)::bigint AS with_phone
+        FROM "Homeowner"
+      `;
 
+      const byStateRows = await prisma.$queryRaw<Array<{ state: string; cnt: bigint }>>`
+        SELECT state, COUNT(*)::bigint AS cnt
+        FROM "Homeowner"
+        WHERE state IS NOT NULL
+        GROUP BY state
+        ORDER BY cnt DESC
+        LIMIT 10
+      `;
+
+      const byCityRows = await prisma.$queryRaw<Array<{ city: string; cnt: bigint }>>`
+        SELECT city, COUNT(*)::bigint AS cnt
+        FROM "Homeowner"
+        WHERE city IS NOT NULL
+        GROUP BY city
+        ORDER BY cnt DESC
+        LIMIT 10
+      `;
+
+      const c = counts[0];
       sendSuccess(res, {
-        total,
-        enriched,
-        withEmail,
-        withPhone,
-        byState: byState.reduce((acc: any, s: any) => { if (s.state) acc[s.state] = s._count; return acc; }, {}),
-        byCity: byCity.reduce((acc: any, c: any) => { if (c.city) acc[c.city] = c._count; return acc; }, {}),
+        total: Number(c.total),
+        enriched: Number(c.enriched),
+        withEmail: Number(c.with_email),
+        withPhone: Number(c.with_phone),
+        byState: byStateRows.reduce((acc: any, s) => { acc[s.state] = Number(s.cnt); return acc; }, {}),
+        byCity: byCityRows.reduce((acc: any, s) => { acc[s.city] = Number(s.cnt); return acc; }, {}),
       });
     } catch (error) {
       next(error);
