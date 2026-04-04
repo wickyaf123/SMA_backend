@@ -135,12 +135,13 @@ export class DailyMetricsService {
   /**
    * Get metrics for a specific date
    */
-  async getMetricsForDate(date: Date): Promise<DailyMetricsData | null> {
+  async getMetricsForDate(date: Date, userId?: string): Promise<DailyMetricsData | null> {
     const dateOnly = this.stripTime(date);
 
-    const metrics = await prisma.dailyMetrics.findUnique({
-      where: { date: dateOnly },
-    });
+    const where: any = { date: dateOnly };
+    if (userId) where.userId = userId;
+
+    const metrics = await prisma.dailyMetrics.findFirst({ where });
 
     if (!metrics) return null;
 
@@ -152,15 +153,19 @@ export class DailyMetricsService {
    */
   async getMetricsForRange(
     startDate: Date,
-    endDate: Date
+    endDate: Date,
+    userId?: string
   ): Promise<DailyMetricsData[]> {
-    const metrics = await prisma.dailyMetrics.findMany({
-      where: {
-        date: {
-          gte: this.stripTime(startDate),
-          lte: this.stripTime(endDate),
-        },
+    const where: any = {
+      date: {
+        gte: this.stripTime(startDate),
+        lte: this.stripTime(endDate),
       },
+    };
+    if (userId) where.userId = userId;
+
+    const metrics = await prisma.dailyMetrics.findMany({
+      where,
       orderBy: { date: 'asc' },
     });
 
@@ -170,12 +175,12 @@ export class DailyMetricsService {
   /**
    * Get last N days of metrics
    */
-  async getLastNDays(days: number): Promise<DailyMetricsData[]> {
+  async getLastNDays(days: number, userId?: string): Promise<DailyMetricsData[]> {
     const endDate = new Date();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    return this.getMetricsForRange(startDate, endDate);
+    return this.getMetricsForRange(startDate, endDate, userId);
   }
 
   /**
@@ -238,7 +243,7 @@ export class DailyMetricsService {
   /**
    * Get aggregated stats for dashboard
    */
-  async getAggregatedStats(days: number = 30): Promise<{
+  async getAggregatedStats(days: number = 30, userId?: string): Promise<{
     totalContactsImported: number;
     totalEmailsSent: number;
     totalSmsSent: number;
@@ -247,7 +252,7 @@ export class DailyMetricsService {
     avgEmailOpenRate: number;
     avgReplyRate: number;
   }> {
-    const metrics = await this.getLastNDays(days);
+    const metrics = await this.getLastNDays(days, userId);
 
     const totals = metrics.reduce(
       (acc, m) => ({

@@ -38,7 +38,8 @@ export class ContactController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const contact = await contactService.createContact(req.body);
+      const userId = req.user?.userId;
+      const contact = await contactService.createContact(req.body, userId);
       
       res.status(201).json(successResponse(contact, {
         message: 'Contact created successfully',
@@ -60,7 +61,8 @@ export class ContactController {
   ): Promise<void> {
     try {
       const { id } = req.params;
-      const contact = await contactService.getContactById(id);
+      const userId = req.user?.userId;
+      const contact = await contactService.getContactById(id, userId);
       
       res.json(successResponse(contact));
     } catch (error: any) {
@@ -83,7 +85,8 @@ export class ContactController {
   ): Promise<void> {
     try {
       const { id } = req.params;
-      const contact = await contactService.updateContact(id, req.body);
+      const userId = req.user?.userId;
+      const contact = await contactService.updateContact(id, req.body, userId);
       
       res.json(successResponse(contact, {
         message: 'Contact updated successfully',
@@ -108,7 +111,8 @@ export class ContactController {
   ): Promise<void> {
     try {
       const { id } = req.params;
-      await contactService.deleteContact(id);
+      const userId = req.user?.userId;
+      await contactService.deleteContact(id, userId);
       
       res.json(successResponse(null, {
         message: 'Contact deleted successfully',
@@ -163,8 +167,9 @@ export class ContactController {
         filters.limit = parseInt(filters.limit, 10);
       }
       
-      const result = await contactService.searchContacts(filters);
-      
+      const userId = req.user?.userId;
+      const result = await contactService.searchContacts(filters, userId);
+
       res.json(successResponse(result.data, {
         pagination: result.pagination,
       }));
@@ -261,7 +266,8 @@ export class ContactController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const stats = await contactService.getStatistics();
+      const userId = req.user?.userId;
+      const stats = await contactService.getStatistics(userId);
       
       res.json(successResponse(stats));
     } catch (error) {

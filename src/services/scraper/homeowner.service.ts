@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { shovelsClient } from '../../integrations/shovels/client';
+import { shovelsClient, ShovelsCreditLimitError } from '../../integrations/shovels/client';
 import { realieClient } from '../../integrations/realie/client';
 import type { RealieProperty } from '../../integrations/realie/types';
 import { normalizeResident } from '../../integrations/shovels/normalizer';
@@ -33,6 +33,8 @@ export interface HomeownerRunResult {
   duplicates: number;
   errors: string[];
   searchesRun: number;
+  apiCallsMade: number;
+  creditLimitHit?: boolean;
 }
 
 export class HomeownerScraperService {
@@ -43,9 +45,11 @@ export class HomeownerScraperService {
     fetchPermitDetails: boolean = true,
     realieFallback: boolean = true
   ): Promise<HomeownerRunResult> {
+    const callsBefore = shovelsClient.runCallCount;
     let totalScraped = 0;
     let totalImported = 0;
     let duplicates = 0;
+    let creditLimitHit = false;
     const errors: string[] = [];
 
     try {
@@ -70,7 +74,11 @@ export class HomeownerScraperService {
           if (result === 'imported') totalImported++;
           else if (result === 'duplicate') duplicates++;
         } catch (err: any) {
-          if (err.code === 'P2002') {
+          if (err instanceof ShovelsCreditLimitError) {
+            creditLimitHit = true;
+            errors.push(`Credit limit reached: ${err.message}`);
+            break;
+          } else if (err.code === 'P2002') {
             duplicates++;
           } else {
             errors.push(`Resident ${resident.id}: ${err.message}`);
@@ -78,26 +86,33 @@ export class HomeownerScraperService {
         }
       }
     } catch (err: any) {
-      errors.push(`Shovels residents failed: ${err.message}`);
-      logger.error({ err: err.message, geoId }, 'Shovels homeowner search failed');
+      if (err instanceof ShovelsCreditLimitError) {
+        creditLimitHit = true;
+        errors.push(`Credit limit reached: ${err.message}`);
+        logger.warn({ geoId }, 'Homeowner scrape stopped — daily credit limit hit');
+      } else {
+        errors.push(`Shovels residents failed: ${err.message}`);
+        logger.error({ err: err.message, geoId }, 'Shovels homeowner search failed');
 
-      if (realieFallback) {
-        logger.info({ geoId, city }, 'Attempting Realie fallback for homeowner discovery');
-        try {
-          const fallbackResult = await this.scrapeByGeoIdViaRealie(geoId, city, maxResults);
-          totalScraped += fallbackResult.totalScraped;
-          totalImported += fallbackResult.totalImported;
-          duplicates += fallbackResult.duplicates;
-          errors.push(...fallbackResult.errors);
-        } catch (fallbackErr: any) {
-          errors.push(`Realie fallback also failed: ${fallbackErr.message}`);
-          logger.error({ err: fallbackErr.message, geoId }, 'Realie fallback failed');
+        if (realieFallback) {
+          logger.info({ geoId, city }, 'Attempting Realie fallback for homeowner discovery');
+          try {
+            const fallbackResult = await this.scrapeByGeoIdViaRealie(geoId, city, maxResults);
+            totalScraped += fallbackResult.totalScraped;
+            totalImported += fallbackResult.totalImported;
+            duplicates += fallbackResult.duplicates;
+            errors.push(...fallbackResult.errors);
+          } catch (fallbackErr: any) {
+            errors.push(`Realie fallback also failed: ${fallbackErr.message}`);
+            logger.error({ err: fallbackErr.message, geoId }, 'Realie fallback failed');
+          }
         }
       }
     }
 
-    logger.info({ totalScraped, totalImported, duplicates, errors: errors.length }, 'Homeowner scrape complete');
-    return { success: true, totalScraped, totalImported, duplicates, errors, searchesRun: 1 };
+    const apiCallsMade = shovelsClient.runCallCount - callsBefore;
+    logger.info({ totalScraped, totalImported, duplicates, apiCallsMade, creditLimitHit, errors: errors.length }, 'Homeowner scrape complete');
+    return { success: true, totalScraped, totalImported, duplicates, errors, searchesRun: 1, apiCallsMade, creditLimitHit };
   }
 
   private async importHomeowner(
@@ -107,7 +122,14 @@ export class HomeownerScraperService {
   ): Promise<'imported' | 'duplicate' | 'skipped'> {
     if (!normalized.email && !normalized.phone && !normalized.fullName) return 'skipped';
 
-    const rawPermitDate = permit?.start_date || permit?.file_date || permit?.first_seen_date || null;
+    const rawPermitDate = permit?.issue_date || permit?.start_date || permit?.file_date || null;
+
+    if (!rawPermitDate && permit?.first_seen_date) {
+      logger.warn(
+        { residentId: normalized.shovelsResidentId, first_seen_date: permit.first_seen_date },
+        'Dropping first_seen_date as permit date fallback (field reset by Shovels Apr 2025)'
+      );
+    }
 
     try {
       const existing = await prisma.homeowner.findUnique({
@@ -152,6 +174,7 @@ export class HomeownerScraperService {
           permitDateFriendly: computeDateFriendly(rawPermitDate),
           permitMonthsAgo: computeMonthsAgo(rawPermitDate),
           permitDescription: permit?.description || null,
+          permitDescriptionDerived: permit?.description_derived || null,
           permitJobValue: permit?.job_value ?? null,
           permitStatus: permit?.status || null,
           permitNumber: permit?.number || null,
@@ -202,7 +225,7 @@ export class HomeownerScraperService {
   ): Promise<HomeownerRunResult> {
     const result: HomeownerRunResult = {
       success: true, totalScraped: 0, totalImported: 0,
-      duplicates: 0, errors: [], searchesRun: 1,
+      duplicates: 0, errors: [], searchesRun: 1, apiCallsMade: 0,
     };
 
     const addresses = await this.collectAddressesForFallback(geoId, city, maxResults);
@@ -436,16 +459,20 @@ export class HomeownerScraperService {
   async runFromSettings(): Promise<HomeownerRunResult> {
     const { settingsService } = await import('../settings/settings.service');
     const settings = await settingsService.getHomeownerSettings();
+
+    const shovelsSettings = await settingsService.getShovelsSettings();
+    shovelsClient.setDailyCreditLimit(shovelsSettings.maxDailyCredits);
+    shovelsClient.resetRunCounter();
+
     const totals: HomeownerRunResult = {
       success: true, totalScraped: 0, totalImported: 0,
-      duplicates: 0, errors: [], searchesRun: 0,
+      duplicates: 0, errors: [], searchesRun: 0, apiCallsMade: 0,
     };
 
     let geoIds = settings.geoIds;
     let locations = settings.locations;
 
     if (settings.useShovelsGeoIds) {
-      const shovelsSettings = await settingsService.getShovelsSettings();
       geoIds = shovelsSettings.geoIds;
       locations = shovelsSettings.locations;
       logger.info(
@@ -460,6 +487,8 @@ export class HomeownerScraperService {
     }
 
     for (let i = 0; i < geoIds.length; i++) {
+      if (totals.creditLimitHit) break;
+
       const geoId = geoIds[i];
       const city = locations[i] || geoId;
 
@@ -478,6 +507,8 @@ export class HomeownerScraperService {
       totals.duplicates += result.duplicates;
       totals.errors.push(...result.errors);
       totals.searchesRun++;
+      totals.apiCallsMade += result.apiCallsMade;
+      if (result.creditLimitHit) totals.creditLimitHit = true;
     }
 
     if (settings.realieEnrich) {

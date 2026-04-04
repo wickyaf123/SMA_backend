@@ -5,8 +5,10 @@
 
 import { ghlClient } from '../../integrations/ghl/client';
 import { prisma } from '../../config/database';
+import { config } from '../../config';
 import { logger } from '../../utils/logger';
-import { GHLContact } from '../../integrations/ghl/types';
+import type { GHLContact, GHLCustomField } from '../../integrations/ghl/types';
+import { permitPersonalizationService } from '../permit/personalization.service';
 
 interface SyncResult {
   ghlContactId: string;
@@ -49,6 +51,8 @@ class GHLContactSyncService {
     const permitTags = (contact.tags || []).filter((t: string) => t.startsWith('permit:'));
     const ghlTags = [...(contact.tags || []), ...(!permitTags.length && contact.permitType ? [`permit:${contact.permitType}`] : [])];
 
+    const fields = config.ghl.fields;
+
     const contactData = {
       firstName: contact.firstName || undefined,
       lastName: contact.lastName || undefined,
@@ -62,21 +66,45 @@ class GHLContactSyncService {
       timezone: contact.timezone || undefined,
       tags: ghlTags,
       source: 'PermitScraper.ai',
-      customFields: [
+      customFields: ([
         { key: 'title', field_value: contact.title || '' },
         { key: 'linkedin_url', field_value: contact.linkedinUrl || '' },
         { key: 'internal_contact_id', field_value: contact.id },
         { key: 'data_quality', field_value: contact.dataQuality?.toString() || '0' },
         { key: 'data_sources', field_value: (contact.dataSources || []).join(', ') },
-        { key: 'permit_type', field_value: contact.permitType || '' },
-        { key: 'permit_city', field_value: contact.permitCity || '' },
-        { key: 'permit_date', field_value: enrichment.permitDate || '' },
-        { key: 'permit_count', field_value: String(enrichment.permitCount || '') },
-        { key: 'avg_job_value', field_value: String(enrichment.avgJobValue || '') },
-        { key: 'total_job_value', field_value: String(enrichment.totalJobValue || '') },
-        { key: 'company_revenue', field_value: enrichment.revenue || '' },
         { key: 'license_number', field_value: contact.licenseNumber || '' },
-      ].filter(f => f.field_value !== ''),
+        { key: 'total_job_value', field_value: String(enrichment.totalJobValue || '') },
+        ...(fields.permitType
+          ? [{ id: fields.permitType, field_value: contact.permitType || '' }]
+          : [{ key: 'permit_type', field_value: contact.permitType || '' }]),
+        ...(fields.permitDateFriendly
+          ? [{ id: fields.permitDateFriendly, field_value: contact.permitDateFriendly || enrichment.permitDate || '' }]
+          : [{ key: 'permit_date', field_value: contact.permitDateFriendly || enrichment.permitDate || '' }]),
+        ...(fields.permitMonthsAgo
+          ? [{ id: fields.permitMonthsAgo, field_value: permitPersonalizationService.formatMonthsAgo(contact.permitMonthsAgo ?? undefined) }]
+          : []),
+        ...(fields.permitDescription
+          ? [{ id: fields.permitDescription, field_value: contact.permitDescriptionDerived || contact.permitDescription || enrichment.permitDescription || '' }]
+          : []),
+        ...(fields.avgJobValue
+          ? [{ id: fields.avgJobValue, field_value: permitPersonalizationService.formatCurrency(contact.avgJobValue || enrichment.avgJobValue) }]
+          : [{ key: 'avg_job_value', field_value: String(enrichment.avgJobValue || '') }]),
+        ...(fields.permitCount
+          ? [{ id: fields.permitCount, field_value: String(contact.permitCount || enrichment.permitCount || '') }]
+          : [{ key: 'permit_count', field_value: String(enrichment.permitCount || '') }]),
+        ...(fields.revenue
+          ? [{ id: fields.revenue, field_value: permitPersonalizationService.formatRevenue(contact.revenue || enrichment.revenue) }]
+          : [{ key: 'company_revenue', field_value: enrichment.revenue || '' }]),
+        ...(fields.reviewCount
+          ? [{ id: fields.reviewCount, field_value: String(contact.reviewCount || enrichment.reviewCount || '') }]
+          : []),
+        ...(fields.propertyValue
+          ? [{ id: fields.propertyValue, field_value: permitPersonalizationService.formatCurrency(enrichment.propertyValue) }]
+          : []),
+        ...(fields.incomeRange
+          ? [{ id: fields.incomeRange, field_value: enrichment.incomeRange || '' }]
+          : []),
+      ] as GHLCustomField[]).filter(f => f.field_value !== ''),
     };
 
     if (ghlContact) {

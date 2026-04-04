@@ -30,75 +30,13 @@ export interface WorkflowPreset {
 
 export const WORKFLOW_PRESETS: WorkflowPreset[] = [
   // ----------------------------------------------------------------
-  // Preset 1: Weekly Prospecting Run
-  // ----------------------------------------------------------------
-  {
-    id: 'weekly-prospecting',
-    name: 'Weekly Prospecting Run',
-    description:
-      'End-to-end weekly lead generation: looks up the target geo, pulls recent permits from the last 7 days, enriches homeowner data, filters to net-new contacts, and surfaces a summary.',
-    triggerHints: ['new leads', 'weekly run', 'prospecting', "what's new"],
-    steps: [
-      {
-        name: 'Lookup geo ID',
-        action: 'lookup_geo_id',
-        params: {
-          city: '', // Filled by caller via run_workflow_preset param overrides
-          state: '', // Filled by caller via run_workflow_preset param overrides
-        },
-        onFailure: 'abort',
-      },
-      {
-        name: 'Search recent permits',
-        action: 'search_permits',
-        params: {
-          geoId: { $ref: 'step_1.output.geoId' },
-          city: { $ref: 'step_1.output.city' },
-          permitType: '', // Filled by caller via run_workflow_preset param overrides
-        },
-        onFailure: 'abort',
-      },
-      {
-        name: 'Enrich homeowners',
-        action: 'enrich_homeowners',
-        params: {
-          batchSize: 50,
-        },
-        onFailure: 'skip',
-      },
-      {
-        name: 'List net-new contacts',
-        action: 'list_contacts',
-        params: {
-          status: 'NEW',
-          city: { $ref: 'step_1.output.city' },
-        },
-        onFailure: 'skip',
-      },
-      {
-        name: 'Surface summary',
-        action: 'get_metrics',
-        params: {
-          days: 7,
-        },
-        onFailure: 'skip',
-        _meta: {
-          summarize: true,
-          summaryPrompt:
-            'Summarize the prospecting run: total permits found, homeowners enriched, net-new contacts, and fill rates.',
-        },
-      },
-    ],
-  },
-
-  // ----------------------------------------------------------------
-  // Preset 2: End of Month Performance Review
+  // Preset 1: End of Month Performance Review
   // ----------------------------------------------------------------
   {
     id: 'monthly-review',
     name: 'End of Month Performance Review',
     description:
-      'Pulls campaign analytics, system metrics, contact stats, and reply data so Claude can summarize reply rates, open rates, contacts reached, warm leads, Clay credits used, and cost per warm lead.',
+      'Pulls campaign analytics, system metrics, contact stats, and reply data so Claude can summarize reply rates, open rates, contacts reached, warm leads, enrichment credits used, and cost per warm lead.',
     triggerHints: ["how'd we do", 'monthly review', 'performance', 'end of month'],
     steps: [
       {
@@ -130,7 +68,7 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
   },
 
   // ----------------------------------------------------------------
-  // Preset 3: Bad Data Cleanup
+  // Preset 2: Bad Data Cleanup
   // ----------------------------------------------------------------
   {
     id: 'bad-data-cleanup',
@@ -171,7 +109,7 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
   },
 
   // ----------------------------------------------------------------
-  // Preset 4: New Market Test Run
+  // Preset 3: New Market Test Run
   // ----------------------------------------------------------------
   {
     id: 'new-market-test',
@@ -224,7 +162,7 @@ export const WORKFLOW_PRESETS: WorkflowPreset[] = [
   },
 
   // ----------------------------------------------------------------
-  // Preset 5: Warm Lead Fast-Track
+  // Preset 4: Warm Lead Fast-Track
   // ----------------------------------------------------------------
   {
     id: 'warm-lead-fast-track',

@@ -29,7 +29,8 @@ export class ImportJobService {
   public async createJob(
     type: ImportJobType,
     totalRecords: number,
-    metadata?: Record<string, any>
+    metadata?: Record<string, any>,
+    userId?: string
   ): Promise<string> {
     try {
       const job = await prisma.importJob.create({
@@ -38,6 +39,7 @@ export class ImportJobService {
           status: ImportJobStatus.PENDING,
           totalRecords,
           metadata: metadata || {},
+          ...(userId && { userId }),
         },
       });
 

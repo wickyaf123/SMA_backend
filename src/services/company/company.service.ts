@@ -9,12 +9,15 @@ export class CompanyService {
   /**
    * Create a new company
    */
-  public async createCompany(data: any): Promise<any> {
+  public async createCompany(data: any, userId?: string): Promise<any> {
     try {
-      logger.info({ name: data.name }, 'Creating company');
+      logger.info({ name: data.name, userId }, 'Creating company');
 
       const company = await prisma.company.create({
-        data,
+        data: {
+          ...data,
+          ...(userId && { userId }),
+        },
         include: {
           contacts: true,
         },
@@ -46,7 +49,7 @@ export class CompanyService {
   /**
    * Get company by ID
    */
-  public async getCompanyById(id: string): Promise<any> {
+  public async getCompanyById(id: string, userId?: string): Promise<any> {
     try {
       const company = await prisma.company.findUnique({
         where: { id },
@@ -60,7 +63,7 @@ export class CompanyService {
         },
       });
 
-      if (!company) {
+      if (!company || (userId && company.userId && company.userId !== userId)) {
         throw new Error(`Company ${id} not found`);
       }
 
@@ -77,12 +80,15 @@ export class CompanyService {
   /**
    * Update company
    */
-  public async updateCompany(id: string, data: any): Promise<any> {
+  public async updateCompany(id: string, data: any, userId?: string): Promise<any> {
     try {
-      logger.info({ companyId: id }, 'Updating company');
+      logger.info({ companyId: id, userId }, 'Updating company');
+
+      const where: any = { id };
+      if (userId) where.userId = userId;
 
       const company = await prisma.company.update({
-        where: { id },
+        where,
         data,
         include: {
           contacts: {
@@ -115,12 +121,15 @@ export class CompanyService {
   /**
    * Delete company
    */
-  public async deleteCompany(id: string): Promise<void> {
+  public async deleteCompany(id: string, userId?: string): Promise<void> {
     try {
-      logger.info({ companyId: id }, 'Deleting company');
+      logger.info({ companyId: id, userId }, 'Deleting company');
+
+      const where: any = { id };
+      if (userId) where.userId = userId;
 
       await prisma.company.delete({
-        where: { id },
+        where,
       });
 
       logger.info({ companyId: id }, 'Company deleted');
@@ -143,11 +152,15 @@ export class CompanyService {
     page?: number;
     limit?: number;
     search?: string;
-  } = {}): Promise<any> {
+  } = {}, userId?: string): Promise<any> {
     try {
       const { page = 1, limit = 50, search } = options;
 
       const where: any = {};
+
+      if (userId) {
+        where.userId = userId;
+      }
 
       if (search) {
         where.OR = [

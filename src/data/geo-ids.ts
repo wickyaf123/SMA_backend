@@ -522,6 +522,11 @@ export const STATE_ABBR_MAP: Record<string, string> = {
  * Supports fuzzy matching: abbreviations, common nicknames, partial matches
  */
 export function lookupGeoId(city: string, state?: string): GeoIdEntry | GeoIdEntry[] | null {
+  // Zip-code passthrough — Shovels accepts 5-digit zips as geo_id directly
+  if (/^\d{5}$/.test(city.trim())) {
+    return { geoId: city.trim(), county: '', state: '', stateAbbr: '' };
+  }
+
   const cityLower = city.toLowerCase().trim();
   const stateLower = state?.toLowerCase().trim();
 

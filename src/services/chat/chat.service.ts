@@ -11,6 +11,18 @@ const MAX_HISTORY_MESSAGES = 50;
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TOOL_ITERATIONS = 10;
 
+/**
+ * Ensure jerry:confirm / jerry:form / jerry:buttons blocks are wrapped in
+ * triple-backtick code fences. Claude sometimes omits the fences after a
+ * tool-use round, which causes the frontend to render raw JSON.
+ */
+function ensureJerryBlocksFenced(content: string): string {
+  return content.replace(
+    /(?:^|\n)\s*jerry:(confirm|form|buttons)\s*\n(\s*\{[\s\S]*?\n\s*\})/gm,
+    '\n```jerry:$1\n$2\n```',
+  );
+}
+
 export class ChatService {
   private client: Anthropic | null = null;
   private activeStreams: Map<string, AbortController> = new Map();
@@ -25,18 +37,28 @@ export class ChatService {
     return this.client;
   }
 
-  async createConversation(title?: string): Promise<any> {
+  async createConversation(title?: string, userId?: string): Promise<any> {
     const conversation = await prisma.conversation.create({
       data: {
         title: title || 'New Chat',
+        ...(userId && { userId }),
       },
     });
-    logger.info({ conversationId: conversation.id }, 'Created new conversation');
+    logger.info({ conversationId: conversation.id, userId }, 'Created new conversation');
     return conversation;
   }
 
-  async listConversations(): Promise<any[]> {
+  async listConversations(userId?: string): Promise<any[]> {
+    const where: any = {};
+    if (userId) {
+      where.OR = [
+        { userId },
+        { userId: null },
+      ];
+    }
+
     return prisma.conversation.findMany({
+      where,
       orderBy: { updatedAt: 'desc' },
       include: {
         messages: {
@@ -48,7 +70,7 @@ export class ChatService {
     });
   }
 
-  async getConversation(id: string): Promise<any> {
+  async getConversation(id: string, userId?: string): Promise<any> {
     const conversation = await prisma.conversation.findUnique({
       where: { id },
       include: {
@@ -60,11 +82,26 @@ export class ChatService {
     if (!conversation) {
       throw new NotFoundError('Conversation not found');
     }
+    if (userId && conversation.userId && conversation.userId !== userId) {
+      throw new NotFoundError('Conversation not found');
+    }
+    // Adopt orphaned conversations: assign to the requesting user
+    if (userId && !conversation.userId) {
+      await prisma.conversation.update({
+        where: { id },
+        data: { userId },
+      });
+    }
     return conversation;
   }
 
-  async deleteConversation(id: string): Promise<void> {
-    const result = await prisma.conversation.deleteMany({ where: { id } });
+  async deleteConversation(id: string, userId?: string): Promise<void> {
+    const where: any = { id };
+    if (userId) {
+      where.OR = [{ userId }, { userId: null }];
+    }
+
+    const result = await prisma.conversation.deleteMany({ where });
     if (result.count === 0) {
       logger.warn({ conversationId: id }, 'Conversation not found for deletion, skipping');
       return;
@@ -72,17 +109,24 @@ export class ChatService {
     logger.info({ conversationId: id }, 'Deleted conversation');
   }
 
-  async searchConversations(query: string): Promise<any[]> {
+  async searchConversations(query: string, userId?: string): Promise<any[]> {
     if (!query || query.trim().length === 0) return [];
 
-    const results = await prisma.message.findMany({
-      where: {
-        content: {
-          contains: query,
-          mode: 'insensitive',
-        },
-        role: { in: ['user', 'assistant'] },
+    const messageWhere: any = {
+      content: {
+        contains: query,
+        mode: 'insensitive',
       },
+      role: { in: ['user', 'assistant'] },
+    };
+    if (userId) {
+      messageWhere.conversation = {
+        OR: [{ userId }, { userId: null }],
+      };
+    }
+
+    const results = await prisma.message.findMany({
+      where: messageWhere,
       select: {
         id: true,
         content: true,
@@ -296,7 +340,6 @@ export class ChatService {
 
       // 5. Stream response from Claude with tool-use loop
       fullResponse = '';
-      let allStreamedText = ''; // Cumulative tracker across tool iterations (never reset)
       let continueLoop = true;
       streamedText = '';
       let toolIterations = 0;
@@ -353,7 +396,6 @@ export class ChatService {
           stream.on('text', (text) => {
             streamedText += text;
             fullResponse += text;
-            allStreamedText += text;
             if (onToken) onToken(text);
           });
 
@@ -466,11 +508,14 @@ export class ChatService {
       }
 
       // 6. Save final assistant message (text-only, NO tool calls — those were saved in the loop)
+      // Use fullResponse (reset per-iteration) to avoid duplicating text from earlier tool-use rounds,
+      // and sanitize any unfenced jerry:* blocks so the frontend can always parse them.
+      const finalText = ensureJerryBlocksFenced(fullResponse || streamedText);
       const savedMessage = await prisma.message.create({
         data: {
           conversationId,
           role: 'assistant',
-          content: allStreamedText || fullResponse || streamedText,
+          content: finalText,
         },
       });
 
@@ -484,7 +529,7 @@ export class ChatService {
             messages: [
               {
                 role: 'user',
-                content: `Generate a 3-6 word title for this conversation. Only output the title, nothing else.\n\nUser: ${userMessage}\nAssistant: ${(allStreamedText || fullResponse || streamedText)?.substring(0, 200)}`,
+                content: `Generate a 3-6 word title for this conversation. Only output the title, nothing else.\n\nUser: ${userMessage}\nAssistant: ${finalText?.substring(0, 200)}`,
               },
             ],
           });
@@ -513,7 +558,7 @@ export class ChatService {
 
       this.activeStreams.delete(conversationId);
 
-      if (onDone) onDone(fullResponse || allStreamedText);
+      if (onDone) onDone(finalText);
 
       return savedMessage;
     } catch (error: any) {

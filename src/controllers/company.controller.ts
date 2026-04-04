@@ -18,7 +18,8 @@ export class CompanyController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const company = await companyService.createCompany(req.body);
+      const userId = req.user?.userId;
+      const company = await companyService.createCompany(req.body, userId);
       
       res.status(201).json(successResponse(company, {
         message: 'Company created successfully',
@@ -40,7 +41,8 @@ export class CompanyController {
   ): Promise<void> {
     try {
       const { id } = req.params;
-      const company = await companyService.getCompanyById(id);
+      const userId = req.user?.userId;
+      const company = await companyService.getCompanyById(id, userId);
       
       res.json(successResponse(company));
     } catch (error: any) {
@@ -63,7 +65,8 @@ export class CompanyController {
   ): Promise<void> {
     try {
       const { id } = req.params;
-      const company = await companyService.updateCompany(id, req.body);
+      const userId = req.user?.userId;
+      const company = await companyService.updateCompany(id, req.body, userId);
       
       res.json(successResponse(company, {
         message: 'Company updated successfully',
@@ -88,7 +91,8 @@ export class CompanyController {
   ): Promise<void> {
     try {
       const { id } = req.params;
-      await companyService.deleteCompany(id);
+      const userId = req.user?.userId;
+      await companyService.deleteCompany(id, userId);
       
       res.json(successResponse(null, {
         message: 'Company deleted successfully',
@@ -112,11 +116,12 @@ export class CompanyController {
     next: NextFunction
   ): Promise<void> {
     try {
+      const userId = req.user?.userId;
       const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
       const search = req.query.search as string | undefined;
 
-      const result = await companyService.listCompanies({ page, limit, search });
+      const result = await companyService.listCompanies({ page, limit, search }, userId);
       
       res.json(successResponse(result.data, {
         pagination: result.pagination,

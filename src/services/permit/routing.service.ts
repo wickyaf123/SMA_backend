@@ -27,7 +27,7 @@ export class PermitRoutingService {
 
     for (const contact of contacts) {
       try {
-        const vars = permitPersonalizationService.buildVariables(contact);
+        const vars = permitPersonalizationService.buildContractorVariables(contact);
 
         if ((mode === 'email' || mode === 'both') && contact.email && campaignId) {
           await this.addToInstantlyCampaign(contact.email, campaignId, vars);
@@ -143,6 +143,23 @@ export class PermitRoutingService {
   private async enrollInGhlWorkflow(contact: any, workflowId: string): Promise<void> {
     if (!config.ghl.apiKey || !config.ghl.locationId) return;
 
+    const fields = config.ghl.fields;
+    const enrichment = (contact.enrichmentData || {}) as Record<string, any>;
+    const vars = permitPersonalizationService.buildContractorVariables(contact);
+
+    const customFields = [
+      fields.permitType && { id: fields.permitType, field_value: contact.permitType || '' },
+      fields.permitDateFriendly && { id: fields.permitDateFriendly, field_value: vars.permit_date_friendly },
+      fields.permitMonthsAgo && { id: fields.permitMonthsAgo, field_value: vars.permit_months_ago },
+      fields.permitDescription && { id: fields.permitDescription, field_value: vars.permit_description },
+      fields.avgJobValue && { id: fields.avgJobValue, field_value: vars.avg_job_value },
+      fields.permitCount && { id: fields.permitCount, field_value: vars.permit_count },
+      fields.revenue && { id: fields.revenue, field_value: vars.revenue },
+      fields.reviewCount && { id: fields.reviewCount, field_value: vars.review_count },
+      fields.propertyValue && { id: fields.propertyValue, field_value: permitPersonalizationService.formatCurrency(enrichment.propertyValue) },
+      fields.incomeRange && { id: fields.incomeRange, field_value: enrichment.incomeRange || '' },
+    ].filter(Boolean).filter((f: any) => f.field_value !== '');
+
     await axios.post(
       `${config.ghl.baseUrl}/contacts/`,
       {
@@ -151,7 +168,9 @@ export class PermitRoutingService {
         firstName: contact.firstName,
         lastName: contact.lastName,
         name: contact.fullName,
+        address1: contact.address || contact.propertyAddress || undefined,
         tags: [`permit:${contact.permitType}`, `city:${contact.permitCity}`],
+        customFields,
       },
       {
         headers: { Authorization: `Bearer ${config.ghl.apiKey}` },

@@ -1,4 +1,5 @@
 import type { ShovelsContractor, ShovelsEmployee, ShovelsPermit, ShovelsResident } from './types';
+import { logger } from '../../utils/logger';
 
 const MAX_PERMIT_AGE_YEARS = 20;
 
@@ -72,6 +73,7 @@ export interface NormalizedShovelsContact {
   permitDateFriendly: string | null;
   permitMonthsAgo: number | null;
   permitDescription: string | null;
+  permitDescriptionDerived: string | null;
   permitStatus: string | null;
   permitNumber: string | null;
   permitJobValue: number | null;
@@ -169,8 +171,15 @@ export function normalizeContractor(
   const primaryPermitType = derivePrimaryPermitType(contractor.tag_tally);
 
   const rawPermitDate = validatePermitDate(
-    mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || mostRecentPermit?.first_seen_date || null
+    mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || null
   );
+
+  if (!rawPermitDate && mostRecentPermit?.first_seen_date) {
+    logger.warn(
+      { contractorId: contractor.id, first_seen_date: mostRecentPermit.first_seen_date },
+      'Dropping first_seen_date as permit date fallback (field reset by Shovels Apr 2025)'
+    );
+  }
 
   return {
     email: extractPrimaryEmail(contractor),
@@ -192,6 +201,7 @@ export function normalizeContractor(
     permitDateFriendly: computeDateFriendly(rawPermitDate),
     permitMonthsAgo: computeMonthsAgo(rawPermitDate),
     permitDescription: mostRecentPermit?.description || null,
+    permitDescriptionDerived: mostRecentPermit?.description_derived || null,
     permitStatus: mostRecentPermit?.status || null,
     permitNumber: mostRecentPermit?.number || null,
     permitJobValue: mostRecentPermit?.job_value ?? null,
@@ -334,8 +344,15 @@ export function normalizeEmployee(
   const primaryPermitType = derivePrimaryPermitType(contractor.tag_tally);
 
   const rawPermitDate = validatePermitDate(
-    mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || mostRecentPermit?.first_seen_date || null
+    mostRecentPermit?.issue_date || mostRecentPermit?.file_date || mostRecentPermit?.start_date || null
   );
+
+  if (!rawPermitDate && mostRecentPermit?.first_seen_date) {
+    logger.warn(
+      { contractorId: contractor.id, employeeId: employee.id, first_seen_date: mostRecentPermit.first_seen_date },
+      'Dropping first_seen_date as permit date fallback (field reset by Shovels Apr 2025)'
+    );
+  }
 
   return {
     email,
@@ -357,6 +374,7 @@ export function normalizeEmployee(
     permitDateFriendly: computeDateFriendly(rawPermitDate),
     permitMonthsAgo: computeMonthsAgo(rawPermitDate),
     permitDescription: mostRecentPermit?.description || null,
+    permitDescriptionDerived: mostRecentPermit?.description_derived || null,
     permitStatus: mostRecentPermit?.status || null,
     permitNumber: mostRecentPermit?.number || null,
     permitJobValue: mostRecentPermit?.job_value ?? null,

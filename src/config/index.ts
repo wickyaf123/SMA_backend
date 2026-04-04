@@ -75,6 +75,18 @@ const envSchema = z.object({
   GHL_PHONE_NUMBER: z.string().optional(),
   GHL_BASE_URL: z.string().url().optional().default('https://rest.gohighlevel.com/v1'),
 
+  // GHL Custom Field IDs (created in GHL Admin > Settings > Custom Fields)
+  GHL_FIELD_PERMIT_TYPE: z.string().optional(),
+  GHL_FIELD_PERMIT_DATE_FRIENDLY: z.string().optional(),
+  GHL_FIELD_PERMIT_MONTHS_AGO: z.string().optional(),
+  GHL_FIELD_PERMIT_DESCRIPTION: z.string().optional(),
+  GHL_FIELD_AVG_JOB_VALUE: z.string().optional(),
+  GHL_FIELD_PERMIT_COUNT: z.string().optional(),
+  GHL_FIELD_REVENUE: z.string().optional(),
+  GHL_FIELD_REVIEW_COUNT: z.string().optional(),
+  GHL_FIELD_PROPERTY_VALUE: z.string().optional(),
+  GHL_FIELD_INCOME_RANGE: z.string().optional(),
+
   // Email Notifications (Phase 3.5)
   NOTIFICATION_EMAIL: z.string().email().optional(),
 
@@ -217,6 +229,18 @@ export const config = {
     locationId: env.GHL_LOCATION_ID,
     phoneNumber: env.GHL_PHONE_NUMBER,
     baseUrl: env.GHL_BASE_URL || 'https://rest.gohighlevel.com/v1',
+    fields: {
+      permitType: env.GHL_FIELD_PERMIT_TYPE,
+      permitDateFriendly: env.GHL_FIELD_PERMIT_DATE_FRIENDLY,
+      permitMonthsAgo: env.GHL_FIELD_PERMIT_MONTHS_AGO,
+      permitDescription: env.GHL_FIELD_PERMIT_DESCRIPTION,
+      avgJobValue: env.GHL_FIELD_AVG_JOB_VALUE,
+      permitCount: env.GHL_FIELD_PERMIT_COUNT,
+      revenue: env.GHL_FIELD_REVENUE,
+      reviewCount: env.GHL_FIELD_REVIEW_COUNT,
+      propertyValue: env.GHL_FIELD_PROPERTY_VALUE,
+      incomeRange: env.GHL_FIELD_INCOME_RANGE,
+    },
   },
 
   notifications: {

@@ -14,6 +14,7 @@ export class ActivityController {
    */
   async getActivities(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.user?.userId;
       const {
         contactId,
         action,
@@ -30,7 +31,7 @@ export class ActivityController {
         actorType: actorType as string,
         page: page ? parseInt(page as string) : undefined,
         limit: limit ? parseInt(limit as string) : undefined,
-      });
+      }, userId);
 
       sendSuccess(res, result.data, undefined, result.pagination);
     } catch (error) {
@@ -44,9 +45,11 @@ export class ActivityController {
    */
   async getRecent(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.user?.userId;
       const { limit } = req.query;
       const activities = await activityService.getRecent(
-        limit ? parseInt(limit as string) : 20
+        limit ? parseInt(limit as string) : 20,
+        userId
       );
       sendSuccess(res, activities);
     } catch (error) {
@@ -60,9 +63,11 @@ export class ActivityController {
    */
   async getStats(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.user?.userId;
       const { days } = req.query;
       const stats = await activityService.getStats(
-        days ? parseInt(days as string) : 7
+        days ? parseInt(days as string) : 7,
+        userId
       );
       sendSuccess(res, stats);
     } catch (error) {

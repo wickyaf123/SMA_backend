@@ -51,9 +51,9 @@ export class ContactService {
    * 4. Create activity log
    * 5. Return contact with validation job ID for tracking
    */
-  public async createContact(data: any): Promise<any> {
+  public async createContact(data: any, userId?: string): Promise<any> {
     try {
-      logger.info({ email: data.email }, 'Creating contact with background validation');
+      logger.info({ email: data.email, userId }, 'Creating contact with background validation');
 
       // 1. Quick duplicate check (synchronous)
       if (data.email) {
@@ -64,8 +64,8 @@ export class ContactService {
       }
 
       // 2. Build fullName if not provided
-      const fullName = data.fullName || 
-        [data.firstName, data.lastName].filter(Boolean).join(' ') || 
+      const fullName = data.fullName ||
+        [data.firstName, data.lastName].filter(Boolean).join(' ') ||
         null;
 
       // 3. Create contact immediately with PENDING validation status
@@ -89,6 +89,7 @@ export class ContactService {
           source: 'manual',
           tags: data.tags || [],
           customFields: data.customFields || {},
+          ...(userId && { userId }),
         },
         include: {
           company: true,
@@ -145,6 +146,7 @@ export class ContactService {
             hasEmail: !!data.email,
             hasPhone: !!data.phone,
           },
+          ...(userId && { userId }),
         },
       });
 
@@ -169,7 +171,7 @@ export class ContactService {
   /**
    * Get contact by ID
    */
-  public async getContactById(id: string): Promise<any> {
+  public async getContactById(id: string, userId?: string): Promise<any> {
     try {
       const contact = await prisma.contact.findUnique({
         where: { id },
@@ -183,7 +185,7 @@ export class ContactService {
         },
       });
 
-      if (!contact) {
+      if (!contact || (userId && contact.userId && contact.userId !== userId)) {
         throw new Error(`Contact ${id} not found`);
       }
 
@@ -200,12 +202,15 @@ export class ContactService {
   /**
    * Update contact
    */
-  public async updateContact(id: string, data: any): Promise<any> {
+  public async updateContact(id: string, data: any, userId?: string): Promise<any> {
     try {
-      logger.info({ contactId: id }, 'Updating contact');
+      logger.info({ contactId: id, userId }, 'Updating contact');
+
+      const where: any = { id };
+      if (userId) where.userId = userId;
 
       const contact = await prisma.contact.update({
-        where: { id },
+        where,
         data,
         include: {
           company: true,
@@ -233,12 +238,15 @@ export class ContactService {
   /**
    * Delete contact
    */
-  public async deleteContact(id: string): Promise<void> {
+  public async deleteContact(id: string, userId?: string): Promise<void> {
     try {
-      logger.info({ contactId: id }, 'Deleting contact');
+      logger.info({ contactId: id, userId }, 'Deleting contact');
+
+      const where: any = { id };
+      if (userId) where.userId = userId;
 
       await prisma.contact.delete({
-        where: { id },
+        where,
       });
 
       logger.info({ contactId: id }, 'Contact deleted');
@@ -258,7 +266,8 @@ export class ContactService {
    * Search and filter contacts with pagination
    */
   public async searchContacts(
-    filters: ContactSearchFilters
+    filters: ContactSearchFilters,
+    userId?: string
   ): Promise<PaginatedResponse<any>> {
     try {
       const {
@@ -279,6 +288,11 @@ export class ContactService {
 
       // Build where clause
       const where: Prisma.ContactWhereInput = {};
+
+      // Multi-tenant data isolation
+      if (userId) {
+        where.userId = userId;
+      }
 
       // Search by email, name, or company name
       if (search) {
@@ -399,12 +413,13 @@ export class ContactService {
   /**
    * Get contacts by IDs
    */
-  public async getContactsByIds(ids: string[]): Promise<any[]> {
+  public async getContactsByIds(ids: string[], userId?: string): Promise<any[]> {
     try {
+      const where: any = { id: { in: ids } };
+      if (userId) where.userId = userId;
+
       const contacts = await prisma.contact.findMany({
-        where: {
-          id: { in: ids },
-        },
+        where,
         include: {
           company: true,
         },
@@ -423,10 +438,15 @@ export class ContactService {
   /**
    * Get contact statistics
    */
-  public async getStatistics(): Promise<any> {
+  public async getStatistics(userId?: string): Promise<any> {
     try {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
+
+      // Build optional userId filter for raw queries
+      const userFilter = userId
+        ? Prisma.sql`AND "userId" = ${userId}`
+        : Prisma.empty;
 
       const counts = await prisma.$queryRaw<Array<{
         total: bigint;
@@ -438,17 +458,20 @@ export class ContactService {
           COUNT(*) FILTER (WHERE "hasReplied" = true)::bigint AS replied,
           COUNT(*) FILTER (WHERE "createdAt" >= ${today})::bigint AS imported_today
         FROM "Contact"
+        WHERE 1=1 ${userFilter}
       `;
 
       const byStatusRows = await prisma.$queryRaw<Array<{ status: string; cnt: bigint }>>`
         SELECT status::text, COUNT(*)::bigint AS cnt
         FROM "Contact"
+        WHERE 1=1 ${userFilter}
         GROUP BY status
       `;
 
       const byEmailRows = await prisma.$queryRaw<Array<{ status: string; cnt: bigint }>>`
         SELECT "emailValidationStatus" AS status, COUNT(*)::bigint AS cnt
         FROM "Contact"
+        WHERE 1=1 ${userFilter}
         GROUP BY "emailValidationStatus"
       `;
 

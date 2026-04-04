@@ -19,7 +19,8 @@ export class CampaignController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const campaign = await campaignService.createCampaign(req.body);
+      const userId = req.user?.userId;
+      const campaign = await campaignService.createCampaign(req.body, userId);
       sendCreated(res, campaign);
     } catch (error) {
       next(error);
@@ -36,6 +37,7 @@ export class CampaignController {
     next: NextFunction
   ): Promise<void> {
     try {
+      const userId = req.user?.userId;
       const filters = {
         channel: req.query.channel as any,
         status: req.query.status as any,
@@ -43,7 +45,7 @@ export class CampaignController {
         offset: req.query.offset ? Number(req.query.offset) : undefined,
       };
 
-      const result = await campaignService.listCampaigns(filters);
+      const result = await campaignService.listCampaigns(filters, userId);
 
       const page = Math.floor((filters.offset || 0) / (filters.limit || 50)) + 1;
       const totalPages = Math.ceil(result.total / (filters.limit || 50));
@@ -71,7 +73,8 @@ export class CampaignController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const campaign = await campaignService.getCampaign(req.params.id);
+      const userId = req.user?.userId;
+      const campaign = await campaignService.getCampaign(req.params.id, userId);
 
       if (!campaign) {
         throw new AppError('Campaign not found', 404, 'CAMPAIGN_NOT_FOUND');
@@ -96,9 +99,11 @@ export class CampaignController {
     next: NextFunction
   ): Promise<void> {
     try {
+      const userId = req.user?.userId;
       const campaign = await campaignService.updateCampaign(
         req.params.id,
-        req.body
+        req.body,
+        userId
       );
       sendSuccess(res, campaign);
     } catch (error) {
@@ -116,7 +121,8 @@ export class CampaignController {
     next: NextFunction
   ): Promise<void> {
     try {
-      await campaignService.deleteCampaign(req.params.id);
+      const userId = req.user?.userId;
+      await campaignService.deleteCampaign(req.params.id, userId);
       sendSuccess(res, { message: 'Campaign archived successfully' });
     } catch (error) {
       next(error);
@@ -307,7 +313,8 @@ export class CampaignController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const stats = await campaignService.getOutreachStats();
+      const userId = req.user?.userId;
+      const stats = await campaignService.getOutreachStats(userId);
       sendSuccess(res, stats);
     } catch (error) {
       next(error);
@@ -381,8 +388,9 @@ export class CampaignController {
     next: NextFunction
   ): Promise<void> {
     try {
-      logger.info('Starting Instantly campaign sync');
-      const result = await campaignService.syncFromInstantly();
+      const userId = req.user?.userId;
+      logger.info({ userId }, 'Starting Instantly campaign sync');
+      const result = await campaignService.syncFromInstantly(userId);
       sendSuccess(res, {
         message: `Synced ${result.campaigns.length} campaigns from Instantly`,
         created: result.created,

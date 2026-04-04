@@ -1,5 +1,6 @@
 import { prisma } from '../../config/database';
 import { shovelsScraperService, clearJobSignal } from '../scraper/shovels.service';
+import { shovelsClient } from '../../integrations/shovels/client';
 import { clayClient } from '../../integrations/clay/client';
 import { HunterEnrichmentService } from '../enrichment/hunter.service';
 import { permitSheetsService } from './sheets.service';
@@ -19,6 +20,7 @@ export interface PermitPipelineParams {
   endDate: string;
   maxResults?: number;
   conversationId?: string;
+  userId?: string;
 }
 
 export class PermitPipelineService {
@@ -39,6 +41,7 @@ export class PermitPipelineService {
           endDate: new Date(params.endDate),
           status: 'SEARCHING',
           conversationId: params.conversationId || null,
+          ...(params.userId && { userId: params.userId }),
         },
       });
     }
@@ -46,6 +49,16 @@ export class PermitPipelineService {
     const dateRangeDays = Math.ceil(
       (new Date(params.endDate).getTime() - new Date(params.startDate).getTime()) / 86400000
     );
+
+    // Initialize credit limit for this pipeline run
+    try {
+      const { settingsService } = await import('../settings/settings.service');
+      const shovelsSettings = await settingsService.getShovelsSettings();
+      shovelsClient.setDailyCreditLimit(shovelsSettings.maxDailyCredits);
+    } catch {
+      shovelsClient.setDailyCreditLimit(5000);
+    }
+    shovelsClient.resetRunCounter();
 
     realtimeEmitter.emitJobEvent({
       jobId: search.id,
@@ -440,7 +453,7 @@ export class PermitPipelineService {
             data: {
               contactId: contact.id,
               action: 'hunter_enrichment_success',
-              description: `Hunter.io found email (confidence: ${result.confidence || 'N/A'})`,
+              description: `Email found (confidence: ${result.confidence || 'N/A'})`,
             },
           });
         } else {
@@ -448,7 +461,7 @@ export class PermitPipelineService {
             data: {
               contactId: contact.id,
               action: 'hunter_enrichment_failed',
-              description: `Hunter.io: ${result.error || 'No email found'}`,
+              description: `Email lookup: ${result.error || 'No email found'}`,
             },
           });
         }
@@ -493,7 +506,7 @@ export class PermitPipelineService {
           data: {
             contactId: contact.id,
             action: 'email_not_found',
-            description: 'All enrichment sources exhausted (Shovels, Clay, Hunter) without finding an email address',
+            description: 'All enrichment sources exhausted without finding an email address',
           },
         });
       }

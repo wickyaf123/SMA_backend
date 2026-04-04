@@ -15,6 +15,7 @@ export interface ActivityLogInput {
   metadata?: Record<string, unknown>;
   actorType?: string;
   actorId?: string;
+  userId?: string;
 }
 
 export interface ActivityFilters {
@@ -41,6 +42,7 @@ export class ActivityService {
           metadata: data.metadata as Prisma.InputJsonValue,
           actorType: data.actorType || 'system',
           actorId: data.actorId,
+          ...(data.userId && { userId: data.userId }),
         },
       });
     } catch (error) {
@@ -51,12 +53,16 @@ export class ActivityService {
   /**
    * Get activity logs with filters and pagination
    */
-  async getActivities(filters: ActivityFilters) {
+  async getActivities(filters: ActivityFilters, userId?: string) {
     const page = filters.page || 1;
     const limit = Math.min(filters.limit || 50, 100);
     const skip = (page - 1) * limit;
 
     const where: Prisma.ActivityLogWhereInput = {};
+
+    if (userId) {
+      where.userId = userId;
+    }
 
     if (filters.contactId) {
       where.contactId = filters.contactId;
@@ -109,8 +115,12 @@ export class ActivityService {
   /**
    * Get recent activities
    */
-  async getRecent(limit: number = 20) {
+  async getRecent(limit: number = 20, userId?: string) {
+    const where: any = {};
+    if (userId) where.userId = userId;
+
     return await prisma.activityLog.findMany({
+      where,
       include: {
         contact: {
           select: {
@@ -128,22 +138,23 @@ export class ActivityService {
   /**
    * Get activity stats
    */
-  async getStats(days: number = 7) {
+  async getStats(days: number = 7, userId?: string) {
     const since = new Date();
     since.setDate(since.getDate() - days);
 
+    const baseWhere: any = { createdAt: { gte: since } };
+    if (userId) baseWhere.userId = userId;
+
     const activities = await prisma.activityLog.groupBy({
       by: ['action'],
-      where: {
-        createdAt: { gte: since },
-      },
+      where: baseWhere,
       _count: true,
     });
 
     const byChannel = await prisma.activityLog.groupBy({
       by: ['channel'],
       where: {
-        createdAt: { gte: since },
+        ...baseWhere,
         channel: { not: null },
       },
       _count: true,

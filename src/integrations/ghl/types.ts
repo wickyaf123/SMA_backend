@@ -5,6 +5,10 @@
 
 // ==================== Contact Types ====================
 
+export type GHLCustomField =
+  | { key: string; field_value: string; id?: undefined }
+  | { id: string; field_value: string; key?: undefined };
+
 export interface GHLContactCreateRequest {
   locationId: string;
   firstName?: string;
@@ -21,8 +25,7 @@ export interface GHLContactCreateRequest {
   timezone?: string;
   tags?: string[];
   source?: string;
-  // GHL v2 API expects customFields as array of {key, field_value}
-  customFields?: Array<{ key: string; field_value: string }>;
+  customFields?: GHLCustomField[];
 }
 
 export interface GHLContactUpdateRequest extends Partial<GHLContactCreateRequest> {
@@ -46,7 +49,7 @@ export interface GHLContact {
   timezone?: string;
   tags?: string[];
   source?: string;
-  customFields?: Array<{ key: string; field_value: string }>;
+  customFields?: GHLCustomField[];
   dateAdded?: string;
   dateUpdated?: string;
 }

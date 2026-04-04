@@ -1,4 +1,4 @@
-import { shovelsClient } from '../../integrations/shovels/client';
+import { shovelsClient, ShovelsCreditLimitError } from '../../integrations/shovels/client';
 import type { ShovelsResident } from '../../integrations/shovels/types';
 import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
@@ -151,6 +151,10 @@ export class ShovelsHomeownerEnrichmentService {
         // Rate limiting: 200ms between calls
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (err: any) {
+        if (err instanceof ShovelsCreditLimitError) {
+          logger.warn('Shovels contact enrichment stopped — daily credit limit hit');
+          break;
+        }
         logger.warn(
           { homeownerId: homeowner.id, error: err.message },
           'Shovels contact enrichment failed for homeowner'

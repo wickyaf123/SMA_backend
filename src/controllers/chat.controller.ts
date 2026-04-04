@@ -9,7 +9,8 @@ export class ChatController {
   async createConversation(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { title } = req.body;
-      const conversation = await chatService.createConversation(title);
+      const userId = req.user?.userId;
+      const conversation = await chatService.createConversation(title, userId);
       sendSuccess(res, conversation, 201);
     } catch (error) {
       next(error);
@@ -18,7 +19,8 @@ export class ChatController {
 
   async listConversations(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const conversations = await chatService.listConversations();
+      const userId = req.user?.userId;
+      const conversations = await chatService.listConversations(userId);
       sendSuccess(res, conversations);
     } catch (error) {
       next(error);
@@ -27,7 +29,8 @@ export class ChatController {
 
   async getConversation(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const conversation = await chatService.getConversation(req.params.id);
+      const userId = req.user?.userId;
+      const conversation = await chatService.getConversation(req.params.id, userId);
       sendSuccess(res, conversation);
     } catch (error) {
       next(error);
@@ -36,7 +39,8 @@ export class ChatController {
 
   async deleteConversation(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      await chatService.deleteConversation(req.params.id);
+      const userId = req.user?.userId;
+      await chatService.deleteConversation(req.params.id, userId);
       sendSuccess(res, { deleted: true });
     } catch (error) {
       next(error);
@@ -105,7 +109,8 @@ export class ChatController {
         sendSuccess(res, []);
         return;
       }
-      const results = await chatService.searchConversations(q);
+      const userId = req.user?.userId;
+      const results = await chatService.searchConversations(q, userId);
       sendSuccess(res, results);
     } catch (error) {
       next(error);

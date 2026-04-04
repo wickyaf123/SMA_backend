@@ -1,6 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
+import { recordCredits, assertCreditBudget, getCreditsUsedToday, ShovelsCreditLimitError } from './credit-tracker';
 import type {
   ShovelsSearchParams,
   ShovelsContractor,
@@ -10,8 +11,13 @@ import type {
   ShovelsApiResponse,
 } from './types';
 
+export { ShovelsCreditLimitError };
+
 export class ShovelsClient {
   private client: AxiosInstance;
+  private dailyCreditLimit: number = 0;
+  /** Per-run counter for embedding in job results */
+  private _runCallCount: number = 0;
 
   constructor() {
     this.client = axios.create({
@@ -34,20 +40,52 @@ export class ShovelsClient {
     );
   }
 
+  /** Set the daily credit cap (call once at job start from DB settings). 0 = unlimited. */
+  setDailyCreditLimit(limit: number): void {
+    this.dailyCreditLimit = limit;
+  }
+
+  /** Reset the per-run call counter (call at start of each job). */
+  resetRunCounter(): void {
+    this._runCallCount = 0;
+  }
+
+  /** How many API calls this run has made. */
+  get runCallCount(): number {
+    return this._runCallCount;
+  }
+
+  /** Get today's total credit usage across all runs. */
+  async getCreditsUsedToday(): Promise<number> {
+    return getCreditsUsedToday();
+  }
+
+  /**
+   * Gate-kept API call: checks budget, makes the request, records the credit.
+   * All public methods should use this instead of `this.client.get` directly.
+   */
+  private async trackedGet<T>(url: string, params?: Record<string, any>): Promise<T> {
+    await assertCreditBudget(this.dailyCreditLimit);
+    const response = await this.client.get<T>(url, { params });
+    this._runCallCount++;
+    await recordCredits(1);
+    return response.data;
+  }
+
   async searchContractors(params: Omit<ShovelsSearchParams, 'cursor'>, maxResults?: number): Promise<ShovelsContractor[]> {
     const results: ShovelsContractor[] = [];
     let cursor: string | undefined;
 
     do {
-      const response = await this.client.get<ShovelsApiResponse<ShovelsContractor>>(
+      const data = await this.trackedGet<ShovelsApiResponse<ShovelsContractor>>(
         '/contractors/search',
-        { params: { ...params, cursor, size: params.size || 50 } }
+        { ...params, cursor, size: params.size || 50 }
       );
-      results.push(...response.data.items);
+      results.push(...data.items);
       if (maxResults && results.length >= maxResults) {
         break;
       }
-      cursor = response.data.next_cursor ?? undefined;
+      cursor = data.next_cursor ?? undefined;
     } while (cursor);
 
     const trimmed = maxResults ? results.slice(0, maxResults) : results;
@@ -55,29 +93,30 @@ export class ShovelsClient {
     return trimmed;
   }
 
-  async getEmployees(contractorId: string): Promise<ShovelsEmployee[]> {
+  async getEmployees(contractorId: string, maxResults: number = 10): Promise<ShovelsEmployee[]> {
     const results: ShovelsEmployee[] = [];
     let cursor: string | undefined;
 
     do {
-      const response = await this.client.get<ShovelsApiResponse<ShovelsEmployee>>(
+      const data = await this.trackedGet<ShovelsApiResponse<ShovelsEmployee>>(
         `/contractors/${contractorId}/employees`,
-        { params: { cursor, size: 50 } }
+        { cursor, size: Math.min(maxResults, 50) }
       );
-      results.push(...response.data.items);
-      cursor = response.data.next_cursor ?? undefined;
+      results.push(...data.items);
+      if (results.length >= maxResults) break;
+      cursor = data.next_cursor ?? undefined;
     } while (cursor);
 
-    return results;
+    return results.slice(0, maxResults);
   }
 
   async getMostRecentPermit(contractorId: string): Promise<ShovelsPermit | null> {
     try {
-      const response = await this.client.get<ShovelsApiResponse<ShovelsPermit>>(
+      const data = await this.trackedGet<ShovelsApiResponse<ShovelsPermit>>(
         `/contractors/${contractorId}/permits`,
-        { params: { size: 1 } }
+        { size: 1 }
       );
-      const permit = response.data.items[0] || null;
+      const permit = data.items[0] || null;
 
       if (permit) {
         logger.info(
@@ -96,6 +135,7 @@ export class ShovelsClient {
 
       return permit;
     } catch (err: any) {
+      if (err instanceof ShovelsCreditLimitError) throw err;
       logger.warn({ contractorId, error: err.message }, 'Failed to fetch permits for contractor');
       return null;
     }
@@ -107,38 +147,50 @@ export class ShovelsClient {
    */
   async getResidents(
     geoId: string,
-    params?: { size?: number; cursor?: string; tags?: string }
+    params?: { size?: number; cursor?: string; tags?: string; maxResults?: number }
   ): Promise<{ residents: ShovelsResident[]; rawSample: any }> {
     const results: ShovelsResident[] = [];
     let rawSample: any = null;
+    const maxResults = params?.maxResults;
+    const pageSize = params?.size || 50;
 
     try {
-      const response = await this.client.get<ShovelsApiResponse<ShovelsResident>>(
-        `/addresses/${geoId}/residents`,
-        { params: { size: params?.size || 10, cursor: params?.cursor, tags: params?.tags } }
-      );
-
-      rawSample = response.data;
-      results.push(...response.data.items);
-
-      if (results.length > 0) {
-        const sample = results[0];
-        logger.info(
-          {
-            geoId,
-            totalReturned: results.length,
-            totalCount: response.data.total_count,
-            sampleFields: Object.keys(sample),
-            sampleRecord: sample,
-          },
-          'Shovels residents endpoint — raw sample response (diagnostic)'
+      let cursor: string | undefined = params?.cursor;
+      do {
+        const data = await this.trackedGet<ShovelsApiResponse<ShovelsResident>>(
+          `/addresses/${geoId}/residents`,
+          { size: pageSize, cursor, tags: params?.tags }
         );
-      } else {
+
+        if (!rawSample) rawSample = data;
+        results.push(...data.items);
+
+        if (results.length === data.items.length && results.length > 0) {
+          const sample = results[0];
+          logger.info(
+            {
+              geoId,
+              totalReturned: results.length,
+              totalCount: data.total_count,
+              sampleFields: Object.keys(sample),
+              sampleRecord: sample,
+            },
+            'Shovels residents endpoint — raw sample response (diagnostic)'
+          );
+        }
+
+        if (maxResults && results.length >= maxResults) break;
+        cursor = data.next_cursor ?? undefined;
+      } while (cursor);
+
+      if (results.length === 0) {
         logger.warn({ geoId }, 'Shovels residents endpoint returned 0 results');
       }
 
-      return { residents: results, rawSample };
+      const trimmed = maxResults ? results.slice(0, maxResults) : results;
+      return { residents: trimmed, rawSample };
     } catch (err: any) {
+      if (err instanceof ShovelsCreditLimitError) throw err;
       logger.error({ geoId, error: err.message, status: err.response?.status }, 'Shovels residents endpoint failed');
       throw err;
     }
@@ -166,12 +218,13 @@ export class ShovelsClient {
 
     let cityCount = 0;
     try {
-      const cityResponse = await this.client.get<ShovelsApiResponse<ShovelsContractor>>(
+      const data = await this.trackedGet<ShovelsApiResponse<ShovelsContractor>>(
         '/contractors/search',
-        { params: { ...searchParams, geo_id: cityGeoId } }
+        { ...searchParams, geo_id: cityGeoId }
       );
-      cityCount = cityResponse.data.total_count ?? cityResponse.data.items.length;
+      cityCount = data.total_count ?? data.items.length;
     } catch (err: any) {
+      if (err instanceof ShovelsCreditLimitError) throw err;
       logger.error({ cityGeoId, error: err.message }, 'City-level geo_id search failed');
     }
 
@@ -180,14 +233,15 @@ export class ShovelsClient {
 
     for (const zip of zipCodes) {
       try {
-        const zipResponse = await this.client.get<ShovelsApiResponse<ShovelsContractor>>(
+        const data = await this.trackedGet<ShovelsApiResponse<ShovelsContractor>>(
           '/contractors/search',
-          { params: { ...searchParams, geo_id: zip } }
+          { ...searchParams, geo_id: zip }
         );
-        const count = zipResponse.data.total_count ?? zipResponse.data.items.length;
+        const count = data.total_count ?? data.items.length;
         zipBreakdown[zip] = count;
         zipTotal += count;
       } catch (err: any) {
+        if (err instanceof ShovelsCreditLimitError) throw err;
         logger.warn({ zip, error: err.message }, 'Zip-level search failed');
         zipBreakdown[zip] = -1;
       }
@@ -209,12 +263,13 @@ export class ShovelsClient {
    */
   async getResidentsByAddress(addressId: string): Promise<ShovelsResident[]> {
     try {
-      const response = await this.client.get<ShovelsApiResponse<ShovelsResident>>(
+      const data = await this.trackedGet<ShovelsApiResponse<ShovelsResident>>(
         `/addresses/${addressId}/residents`,
-        { params: { size: 50 } }
+        { size: 50 }
       );
-      return response.data.items;
+      return data.items;
     } catch (err: any) {
+      if (err instanceof ShovelsCreditLimitError) throw err;
       if (err.response?.status === 404) return [];
       logger.warn({ addressId, error: err.message }, 'Shovels address residents lookup failed');
       return [];
@@ -223,11 +278,12 @@ export class ShovelsClient {
 
   async getPermitById(permitId: string): Promise<ShovelsPermit | null> {
     try {
-      const response = await this.client.get<ShovelsPermit>(
+      const data = await this.trackedGet<ShovelsPermit>(
         `/permits/${permitId}`
       );
-      return response.data || null;
+      return data || null;
     } catch (err: any) {
+      if (err instanceof ShovelsCreditLimitError) throw err;
       if (err.response?.status === 404) return null;
       logger.warn({ permitId, error: err.message }, 'Failed to fetch permit by ID');
       return null;
@@ -241,6 +297,14 @@ export class ShovelsClient {
     } catch {
       return false;
     }
+  }
+
+  /** Snapshot of credit usage for logging/results */
+  async getCreditSnapshot(): Promise<{ todayUsed: number; dailyLimit: number }> {
+    return {
+      todayUsed: await getCreditsUsedToday(),
+      dailyLimit: this.dailyCreditLimit,
+    };
   }
 }
 

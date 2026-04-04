@@ -6,7 +6,10 @@
  */
 
 import { prisma } from '../../config/database';
+import { config } from '../../config';
 import { ghlClient } from '../../integrations/ghl/client';
+import type { GHLCustomField } from '../../integrations/ghl/types';
+import { permitPersonalizationService } from '../permit/personalization.service';
 import { logger } from '../../utils/logger';
 
 export interface RouteToGHLParams {
@@ -51,24 +54,8 @@ class GHLUnifiedInboxService {
       // 1. Get contact with GHL contact ID
       const contact = await prisma.contact.findUnique({
         where: { id: contactId },
-        select: {
-          id: true,
-          email: true,
-          phone: true,
-          fullName: true,
-          firstName: true,
-          lastName: true,
-          ghlContactId: true,
-          city: true,
-          state: true,
-          permitType: true,
-          permitCity: true,
-          licenseNumber: true,
-          tags: true,
-          enrichmentData: true,
-          company: {
-            select: { name: true, website: true },
-          },
+        include: {
+          company: { select: { name: true, website: true } },
         },
       });
 
@@ -97,17 +84,42 @@ class GHLUnifiedInboxService {
           const ghlTags = ['auto-synced', 'lead-system', ...permitTags];
           if (contact.permitType) ghlTags.push(`permit-type:${contact.permitType}`);
 
-          const customFields: Array<{ key: string; field_value: string }> = [
-            { key: 'permit_type', field_value: contact.permitType || '' },
-            { key: 'permit_city', field_value: contact.permitCity || '' },
-            { key: 'permit_date', field_value: enrichment.permitDate || '' },
-            { key: 'permit_count', field_value: String(enrichment.permitCount || '') },
-            { key: 'avg_job_value', field_value: String(enrichment.avgJobValue || '') },
-            { key: 'total_job_value', field_value: String(enrichment.totalJobValue || '') },
-            { key: 'company_revenue', field_value: enrichment.revenue || '' },
+          const fields = config.ghl.fields;
+          const customFields: GHLCustomField[] = ([
             { key: 'license_number', field_value: contact.licenseNumber || '' },
             { key: 'internal_contact_id', field_value: contact.id },
-          ].filter(f => f.field_value !== '');
+            { key: 'total_job_value', field_value: String(enrichment.totalJobValue || '') },
+            ...(fields.permitType
+              ? [{ id: fields.permitType, field_value: contact.permitType || '' }]
+              : [{ key: 'permit_type', field_value: contact.permitType || '' }]),
+            ...(fields.permitDateFriendly
+              ? [{ id: fields.permitDateFriendly, field_value: contact.permitDateFriendly || enrichment.permitDate || '' }]
+              : [{ key: 'permit_date', field_value: enrichment.permitDate || '' }]),
+            ...(fields.permitMonthsAgo
+              ? [{ id: fields.permitMonthsAgo, field_value: permitPersonalizationService.formatMonthsAgo(contact.permitMonthsAgo ?? undefined) }]
+              : []),
+            ...(fields.permitDescription
+              ? [{ id: fields.permitDescription, field_value: contact.permitDescriptionDerived || contact.permitDescription || enrichment.permitDescription || '' }]
+              : []),
+            ...(fields.avgJobValue
+              ? [{ id: fields.avgJobValue, field_value: permitPersonalizationService.formatCurrency(contact.avgJobValue || enrichment.avgJobValue) }]
+              : [{ key: 'avg_job_value', field_value: String(enrichment.avgJobValue || '') }]),
+            ...(fields.permitCount
+              ? [{ id: fields.permitCount, field_value: String(contact.permitCount || enrichment.permitCount || '') }]
+              : [{ key: 'permit_count', field_value: String(enrichment.permitCount || '') }]),
+            ...(fields.revenue
+              ? [{ id: fields.revenue, field_value: permitPersonalizationService.formatRevenue(contact.revenue || enrichment.revenue) }]
+              : [{ key: 'company_revenue', field_value: enrichment.revenue || '' }]),
+            ...(fields.reviewCount
+              ? [{ id: fields.reviewCount, field_value: String(contact.reviewCount || enrichment.reviewCount || '') }]
+              : []),
+            ...(fields.propertyValue
+              ? [{ id: fields.propertyValue, field_value: permitPersonalizationService.formatCurrency(enrichment.propertyValue) }]
+              : []),
+            ...(fields.incomeRange
+              ? [{ id: fields.incomeRange, field_value: enrichment.incomeRange || '' }]
+              : []),
+          ] as GHLCustomField[]).filter(f => f.field_value !== '');
 
           const newGHLContact = await ghlClient.createContact({
             firstName: contact.firstName || contact.fullName?.split(' ')[0] || 'Unknown',

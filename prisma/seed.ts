@@ -1,9 +1,26 @@
 import { PrismaClient, ContactStatus, EmailValidationStatus, PhoneValidationStatus, SequenceStatus, OutreachChannel } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 async function main() {
   console.log('🌱 Seeding database...');
+
+  // Create default admin user (upsert to be idempotent)
+  const passwordHash = await bcrypt.hash('changeme123', 12);
+  const adminUser = await prisma.user.upsert({
+    where: { email: 'admin@permitscraper.ai' },
+    update: {},
+    create: {
+      email: 'admin@permitscraper.ai',
+      passwordHash,
+      firstName: 'Admin',
+      lastName: 'User',
+      role: 'ADMIN',
+      isActive: true,
+    },
+  });
+  console.log('✅ Created default admin user:', adminUser.email);
 
   // Create test companies
   const company1 = await prisma.company.create({
@@ -172,6 +189,7 @@ async function main() {
 
   console.log('🎉 Seeding complete!');
   console.log(`📊 Summary:`);
+  console.log(`   - Admin User: 1 (admin@permitscraper.ai)`);
   console.log(`   - Companies: 2`);
   console.log(`   - Contacts: 3`);
   console.log(`   - Sequences: 1`);

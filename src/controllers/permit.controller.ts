@@ -8,6 +8,7 @@ export class PermitController {
   async search(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { permitType, city, geoId, startDate, endDate } = req.body;
+      const userId = req.user?.userId;
 
       if (!permitType || !city || !geoId || !startDate || !endDate) {
         res.status(400).json({
@@ -18,7 +19,7 @@ export class PermitController {
       }
 
       const searchId = await permitPipelineService.startSearch({
-        permitType, city, geoId, startDate, endDate,
+        permitType, city, geoId, startDate, endDate, userId,
       });
 
       res.status(202).json({
@@ -32,10 +33,11 @@ export class PermitController {
 
   async getSearch(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.user?.userId;
       const search = await prisma.permitSearch.findUnique({
         where: { id: req.params.id },
       });
-      if (!search) {
+      if (!search || (userId && search.userId && search.userId !== userId)) {
         res.status(404).json({ success: false, error: 'Search not found' });
         return;
       }
@@ -47,7 +49,12 @@ export class PermitController {
 
   async listSearches(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.user?.userId;
+      const where: any = {};
+      if (userId) where.userId = userId;
+
       const searches = await prisma.permitSearch.findMany({
+        where,
         orderBy: { createdAt: 'desc' },
         take: 50,
       });
@@ -59,7 +66,12 @@ export class PermitController {
 
   async getLatestSearch(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = req.user?.userId;
+      const where: any = {};
+      if (userId) where.userId = userId;
+
       const search = await prisma.permitSearch.findFirst({
+        where,
         orderBy: { createdAt: 'desc' },
       });
       res.json({ success: true, data: search });

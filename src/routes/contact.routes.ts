@@ -54,7 +54,8 @@ router.get(
         filters.hasReplied = filters.hasReplied === 'true';
       }
       
-      const csv = await contactExportService.exportToCSV(filters);
+      const userId = req.user?.userId;
+      const csv = await contactExportService.exportToCSV(filters, userId);
       const filename = contactExportService.getFilename();
       
       res.setHeader('Content-Type', 'text/csv');

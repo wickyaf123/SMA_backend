@@ -15,7 +15,8 @@ export class TemplateController {
    */
   async createTemplate(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const template = await messageTemplateService.createTemplate(req.body);
+      const userId = req.user?.userId;
+      const template = await messageTemplateService.createTemplate({ ...req.body, userId });
       sendCreated(res, { ...template, message: 'Template created successfully' });
     } catch (error) {
       next(error);

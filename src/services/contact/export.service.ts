@@ -10,16 +10,16 @@ export class ContactExportService {
   /**
    * Export contacts to CSV
    */
-  public async exportToCSV(filters: ContactSearchFilters): Promise<string> {
+  public async exportToCSV(filters: ContactSearchFilters, userId?: string): Promise<string> {
     try {
-      logger.info({ filters }, 'Exporting contacts to CSV');
+      logger.info({ filters, userId }, 'Exporting contacts to CSV');
 
       // Get all matching contacts (remove pagination)
       const result = await contactService.searchContacts({
         ...filters,
         page: 1,
         limit: 10000, // Max export limit
-      });
+      }, userId);
 
       const contacts = result.data;
 

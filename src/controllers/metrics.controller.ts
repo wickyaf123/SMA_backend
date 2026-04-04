@@ -19,15 +19,16 @@ export class MetricsController {
     next: NextFunction
   ): Promise<void> {
     try {
+      const userId = req.user?.userId;
       const days = parseInt(req.query.days as string) || 30;
 
       if (days < 1 || days > 365) {
         throw new AppError('Days must be between 1 and 365', 400, 'INVALID_RANGE');
       }
 
-      logger.debug({ days }, 'Fetching daily metrics');
+      logger.debug({ days, userId }, 'Fetching daily metrics');
 
-      const metrics = await dailyMetricsService.getLastNDays(days);
+      const metrics = await dailyMetricsService.getLastNDays(days, userId);
 
       res.json({
         success: true,
@@ -52,10 +53,11 @@ export class MetricsController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const startDate = req.query.startDate 
+      const userId = req.user?.userId;
+      const startDate = req.query.startDate
         ? new Date(req.query.startDate as string)
         : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      
+
       const endDate = req.query.endDate
         ? new Date(req.query.endDate as string)
         : new Date();
@@ -64,9 +66,9 @@ export class MetricsController {
         throw new AppError('Start date must be before end date', 400, 'INVALID_RANGE');
       }
 
-      logger.debug({ startDate, endDate }, 'Fetching metrics for date range');
+      logger.debug({ startDate, endDate, userId }, 'Fetching metrics for date range');
 
-      const metrics = await dailyMetricsService.getMetricsForRange(startDate, endDate);
+      const metrics = await dailyMetricsService.getMetricsForRange(startDate, endDate, userId);
 
       res.json({
         success: true,
@@ -92,11 +94,12 @@ export class MetricsController {
     next: NextFunction
   ): Promise<void> {
     try {
+      const userId = req.user?.userId;
       const days = parseInt(req.query.days as string) || 30;
 
-      logger.debug({ days }, 'Fetching aggregated stats');
+      logger.debug({ days, userId }, 'Fetching aggregated stats');
 
-      const stats = await dailyMetricsService.getAggregatedStats(days);
+      const stats = await dailyMetricsService.getAggregatedStats(days, userId);
 
       res.json({
         success: true,

@@ -104,6 +104,7 @@ class MessageTemplateService {
           isDefault: data.isDefault ?? false,
           tags: data.tags ?? [],
           variables: allVariables,
+          ...((data as any).userId && { userId: (data as any).userId }),
         },
       });
 

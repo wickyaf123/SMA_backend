@@ -875,6 +875,8 @@ const handlers: Record<string, ToolHandler> = {
           ghlContactId: contractor.ghlContactId,
           permitType: contractor.permitType,
           permitCity: contractor.permitCity,
+          permitDescription: contractor.permitDescription,
+          permitDescriptionDerived: contractor.permitDescriptionDerived,
           licenseNumber: contractor.licenseNumber,
           avgJobValue: contractor.avgJobValue,
           totalJobValue: contractor.totalJobValue,

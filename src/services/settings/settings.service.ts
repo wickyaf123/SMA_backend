@@ -75,6 +75,8 @@ export interface ShovelsScraperSettings {
   maxResults: number;
   enableEmployees: boolean;
   employeeFilter: EmployeeFilterSettings;
+  maxDailyCredits: number;
+  maxEmployeesPerContractor: number;
 }
 
 export interface HomeownerScraperSettings {
@@ -89,38 +91,50 @@ export interface HomeownerScraperSettings {
 
 export class SettingsService {
   /**
+   * Resolve the settings ID for a given user.
+   * Falls back to DEFAULT_SETTINGS_ID when no userId is provided (backward compat).
+   */
+  private getSettingsId(userId?: string): string {
+    return userId || DEFAULT_SETTINGS_ID;
+  }
+
+  /**
    * Get global settings (creates default if not exists)
    */
-  async getSettings() {
+  async getSettings(userId?: string) {
     try {
+      const settingsId = this.getSettingsId(userId);
+
       let settings = await prisma.settings.findUnique({
-        where: { id: DEFAULT_SETTINGS_ID },
+        where: { id: settingsId },
       });
 
       if (!settings) {
-        logger.info('Creating default settings');
+        logger.info({ settingsId, userId }, 'Creating default settings');
         settings = await prisma.settings.create({
           data: {
-            id: DEFAULT_SETTINGS_ID,
+            id: settingsId,
             linkedinGloballyEnabled: true,
+            ...(userId && { userId }),
           },
         });
       }
 
       return settings;
     } catch (error) {
-      logger.error({ error }, 'Failed to get settings');
+      logger.error({ error, userId }, 'Failed to get settings');
       throw new AppError('Failed to retrieve settings', 500, 'SETTINGS_ERROR');
     }
   }
 
-  async updateSettings(data: UpdateSettingsData) {
+  async updateSettings(data: UpdateSettingsData, userId?: string) {
     try {
-      logger.info({ updates: Object.keys(data) }, 'Updating settings');
-      await this.getSettings();
+      logger.info({ updates: Object.keys(data), userId }, 'Updating settings');
+      const settingsId = this.getSettingsId(userId);
+      await this.getSettings(userId);
 
       const settings = await prisma.settings.update({
-        where: { id: DEFAULT_SETTINGS_ID },
+        where: { id: settingsId },
         data: {
           ...data,
           updatedAt: new Date(),
@@ -304,6 +318,8 @@ export class SettingsService {
         titleInclude: settings.shovelsEmployeeTitleInclude || ['Owner', 'President', 'CEO', 'Founder', 'Director', 'VP', 'Vice President'],
         titleExclude: settings.shovelsEmployeeTitleExclude || ['Technician', 'Installer', 'Helper', 'Laborer', 'Apprentice'],
       },
+      maxDailyCredits: (settings as any).shovelsMaxDailyCredits ?? 5000,
+      maxEmployeesPerContractor: (settings as any).shovelsMaxEmployeesPerContractor ?? 10,
     };
   }
 
@@ -326,6 +342,8 @@ export class SettingsService {
             shovelsEmployeeTitleInclude: data.employeeFilter.titleInclude,
             shovelsEmployeeTitleExclude: data.employeeFilter.titleExclude,
           }),
+          ...(data.maxDailyCredits !== undefined && { shovelsMaxDailyCredits: data.maxDailyCredits }),
+          ...(data.maxEmployeesPerContractor !== undefined && { shovelsMaxEmployeesPerContractor: data.maxEmployeesPerContractor }),
           updatedAt: new Date(),
         },
       });

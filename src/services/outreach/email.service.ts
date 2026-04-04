@@ -4,6 +4,7 @@ import { AppError } from '../../utils/errors';
 import { getInstantlyClient } from '../../integrations/instantly/client';
 import { config } from '../../config';
 import type { EnrollmentStatus } from '@prisma/client';
+import { permitPersonalizationService } from '../permit/personalization.service';
 
 export interface EmailEnrollmentOptions {
   skipIfInWorkspace?: boolean;
@@ -100,6 +101,7 @@ export class EmailOutreachService {
       for (const contact of contacts) {
         try {
           // Add to Instantly
+          const contactVars = permitPersonalizationService.buildContractorVariables(contact);
           await this.instantlyClient.addLead({
             campaign_id: campaign.instantlyCampaignId,
             email: contact.email!,
@@ -108,7 +110,10 @@ export class EmailOutreachService {
             company_name: contact.company?.name || undefined,
             phone_number: contact.phone || undefined,
             website: contact.company?.website || undefined,
-            custom_variables: options.customVariables || undefined,
+            custom_variables: {
+              ...contactVars,
+              ...(options.customVariables || {}),
+            },
             // Default to false so leads actually get enrolled in campaigns
             // Users can opt-in to skip via enrollment dialog options
             skip_if_in_workspace: options.skipIfInWorkspace ?? false,

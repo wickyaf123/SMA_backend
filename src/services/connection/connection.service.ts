@@ -98,6 +98,7 @@ export class ConnectionService {
             permitDate: permit.issue_date || permit.file_date || permit.start_date || null,
             permitJobValue: permit.job_value ?? null,
             permitDescription: permit.description || null,
+            permitDescriptionDerived: permit.description_derived || null,
             source: 'shovels',
           },
         });
@@ -153,6 +154,7 @@ export class ConnectionService {
           permitDate: permitData.issue_date || permitData.file_date || permitData.start_date || null,
           permitJobValue: permitData.job_value ?? null,
           permitDescription: permitData.description || null,
+          permitDescriptionDerived: permitData.description_derived || null,
           source: 'shovels',
         },
       });

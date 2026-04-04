@@ -54,9 +54,9 @@ export class CampaignService {
   /**
    * Create a new campaign
    */
-  async createCampaign(data: CreateCampaignData): Promise<Campaign> {
+  async createCampaign(data: CreateCampaignData, userId?: string): Promise<Campaign> {
     try {
-      logger.info({ name: data.name, channel: data.channel }, 'Creating campaign');
+      logger.info({ name: data.name, channel: data.channel, userId }, 'Creating campaign');
 
       const campaign = await prisma.campaign.create({
         data: {
@@ -69,6 +69,7 @@ export class CampaignService {
           settings: data.settings,
           linkedinEnabled: data.linkedinEnabled ?? true, // Default to true
           status: 'DRAFT',
+          ...(userId && { userId }),
         },
       });
 
@@ -83,8 +84,8 @@ export class CampaignService {
   /**
    * Get campaign by ID
    */
-  async getCampaign(campaignId: string): Promise<Campaign | null> {
-    return prisma.campaign.findUnique({
+  async getCampaign(campaignId: string, userId?: string): Promise<Campaign | null> {
+    const campaign = await prisma.campaign.findUnique({
       where: { id: campaignId },
       include: {
         enrollments: {
@@ -102,6 +103,12 @@ export class CampaignService {
         },
       },
     });
+
+    if (campaign && userId && campaign.userId && campaign.userId !== userId) {
+      return null;
+    }
+
+    return campaign;
   }
 
   /**
@@ -112,8 +119,12 @@ export class CampaignService {
     status?: CampaignStatus;
     limit?: number;
     offset?: number;
-  }): Promise<{ campaigns: Campaign[]; total: number }> {
+  }, userId?: string): Promise<{ campaigns: Campaign[]; total: number }> {
     const where: any = {};
+
+    if (userId) {
+      where.userId = userId;
+    }
 
     if (filters?.channel) {
       where.channel = filters.channel;
@@ -146,13 +157,17 @@ export class CampaignService {
    */
   async updateCampaign(
     campaignId: string,
-    data: UpdateCampaignData
+    data: UpdateCampaignData,
+    userId?: string
   ): Promise<Campaign> {
     try {
-      logger.info({ campaignId, updates: Object.keys(data) }, 'Updating campaign');
+      logger.info({ campaignId, updates: Object.keys(data), userId }, 'Updating campaign');
+
+      const where: any = { id: campaignId };
+      if (userId) where.userId = userId;
 
       const campaign = await prisma.campaign.update({
-        where: { id: campaignId },
+        where,
         data: {
           ...data,
           updatedAt: new Date(),
@@ -170,12 +185,15 @@ export class CampaignService {
   /**
    * Delete (archive) campaign
    */
-  async deleteCampaign(campaignId: string): Promise<void> {
+  async deleteCampaign(campaignId: string, userId?: string): Promise<void> {
     try {
-      logger.info({ campaignId }, 'Archiving campaign');
+      logger.info({ campaignId, userId }, 'Archiving campaign');
+
+      const where: any = { id: campaignId };
+      if (userId) where.userId = userId;
 
       await prisma.campaign.update({
-        where: { id: campaignId },
+        where,
         data: { status: 'ARCHIVED' },
       });
 
@@ -472,7 +490,7 @@ export class CampaignService {
    * Sync campaigns from Instantly
    * Creates local Campaign records for any Instantly campaigns that don't exist locally
    */
-  async syncFromInstantly(): Promise<{ created: number; updated: number; campaigns: Campaign[] }> {
+  async syncFromInstantly(userId?: string): Promise<{ created: number; updated: number; campaigns: Campaign[] }> {
     try {
       logger.info('Starting sync from Instantly');
 
@@ -532,6 +550,7 @@ export class CampaignService {
               instantlyCampaignId: ic.id,
               status: isActive ? 'ACTIVE' : 'DRAFT',
               description: `Synced from Instantly`,
+              ...(userId && { userId }),
             },
           });
           campaigns.push(newCampaign);
@@ -552,7 +571,7 @@ export class CampaignService {
   /**
    * Get aggregated outreach stats by channel
    */
-  async getOutreachStats(): Promise<{
+  async getOutreachStats(userId?: string): Promise<{
     email: ChannelStats;
     sms: ChannelStats;
     linkedin: ChannelStats;
@@ -565,7 +584,13 @@ export class CampaignService {
   }> {
     try {
       // Get all enrollments grouped by campaign channel and status
+      const where: any = {};
+      if (userId) {
+        where.campaign = { userId };
+      }
+
       const enrollments = await prisma.campaignEnrollment.findMany({
+        where,
         include: {
           campaign: {
             select: { channel: true }

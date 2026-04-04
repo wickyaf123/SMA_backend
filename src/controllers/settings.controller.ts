@@ -22,7 +22,8 @@ export class SettingsController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const settings = await settingsService.getSettings();
+      const userId = req.user?.userId;
+      const settings = await settingsService.getSettings(userId);
       sendSuccess(res, settings);
     } catch (error) {
       next(error);
@@ -39,7 +40,8 @@ export class SettingsController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const settings = await settingsService.updateSettings(req.body);
+      const userId = req.user?.userId;
+      const settings = await settingsService.updateSettings(req.body, userId);
       sendSuccess(res, settings);
     } catch (error) {
       next(error);

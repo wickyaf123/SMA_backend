@@ -92,6 +92,7 @@ export interface ShovelsPermit {
   id: string;
   number: string;
   description: string | null;
+  description_derived: string | null;
   jurisdiction: string;
   job_value: number | null;
   type: string | null;

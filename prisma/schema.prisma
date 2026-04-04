@@ -20,7 +20,37 @@ model User {
   createdAt    DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
 
+  // Reverse relations for tenant-scoped models
+  sessions             Session[]
+  contacts             Contact[]
+  companies            Company[]
+  campaigns            Campaign[]
+  campaignRoutingRules CampaignRoutingRule[]
+  conversations        Conversation[]
+  permitSearches       PermitSearch[]
+  homeowners           Homeowner[]
+  settings             Settings[]
+  importJobs           ImportJob[]
+  messageTemplates     MessageTemplate[]
+  activityLogs         ActivityLog[]
+  dailyMetrics         DailyMetrics[]
+
   @@index([email])
+}
+
+model Session {
+  id           String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken String   @unique
+  expiresAt    DateTime @db.Timestamptz(6)
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([userId])
+  @@index([refreshToken])
+  @@index([expiresAt])
 }
 
 enum UserRole {
@@ -49,12 +79,15 @@ model Company {
   dataQuality      Int?      @default(0)
   apifyId          String?   @unique
   hunterEnrichedAt DateTime?
+  userId           String?
+  user             User?     @relation(fields: [userId], references: [id])
   contacts         Contact[]
 
   @@index([domain])
   @@index([name])
   @@index([apifyId])
   @@index([dataQuality])
+  @@index([userId])
 }
 
 model Contact {
@@ -104,13 +137,16 @@ model Contact {
   permitCity              String?
   licenseNumber           String?
   permitSearchId          String?
+  userId                  String?
+  user                    User?                 @relation(fields: [userId], references: [id])
 
   // Promoted permit fields (for Instantly personalization)
-  permitDate         String?
-  permitDateFriendly String?
-  permitMonthsAgo    Int?
-  permitDescription  String?
-  permitStatus       String?
+  permitDate                String?
+  permitDateFriendly        String?
+  permitMonthsAgo           Int?
+  permitDescription         String?
+  permitDescriptionDerived  String?
+  permitStatus              String?
   permitNumber       String?
   permitJobValue     Float?
   permitFees         Float?
@@ -149,6 +185,7 @@ model Contact {
   @@index([apifyId])
   @@index([dataQuality])
   @@index([ghlContactId])
+  @@index([userId])
 }
 
 model Campaign {
@@ -164,6 +201,8 @@ model Campaign {
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
   linkedinEnabled     Boolean               @default(true)
+  userId              String?
+  user                User?                 @relation(fields: [userId], references: [id])
   enrollments         CampaignEnrollment[]
   routingRules        CampaignRoutingRule[]
 
@@ -171,6 +210,7 @@ model Campaign {
   @@index([channel])
   @@index([instantlyCampaignId])
   @@index([createdAt])
+  @@index([userId])
 }
 
 model CampaignRoutingRule {
@@ -190,10 +230,13 @@ model CampaignRoutingRule {
   campaignId         String
   createdAt          DateTime @default(now()) @db.Timestamp(6)
   updatedAt          DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  userId             String?
+  user               User?    @relation(fields: [userId], references: [id])
   campaign           Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
   @@index([isActive, priority(sort: Desc)])
   @@index([campaignId])
+  @@index([userId])
 }
 
 model CampaignEnrollment {
@@ -389,11 +432,14 @@ model ActivityLog {
   actorType   String           @default("system")
   actorId     String?
   createdAt   DateTime         @default(now()) @db.Timestamptz(6)
+  userId      String?
+  user        User?            @relation(fields: [userId], references: [id])
   contact     Contact?         @relation(fields: [contactId], references: [id])
 
   @@index([contactId])
   @@index([action])
   @@index([createdAt])
+  @@index([userId])
 }
 
 model SystemConfig {
@@ -448,9 +494,12 @@ model ImportJob {
   startedAt        DateTime?       @db.Timestamptz(6)
   completedAt      DateTime?       @db.Timestamptz(6)
   updatedAt        DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  userId           String?
+  user             User?           @relation(fields: [userId], references: [id])
 
   @@index([status])
   @@index([createdAt])
+  @@index([userId])
 }
 
 model Settings {
@@ -460,6 +509,8 @@ model Settings {
   updatedAt               DateTime @default(now()) @updatedAt
   defaultEmailCampaignId  String?
   defaultSmsCampaignId    String?
+  userId                  String?
+  user                    User?    @relation(fields: [userId], references: [id])
 
   // Apify (Google Maps) Scraper - New array-based fields
   apifySearchTerms        String[] @default([])
@@ -540,6 +591,10 @@ model Settings {
   shovelsMaxResults      Int?     @default(100)
   shovelsEnableEmployees Boolean  @default(true)
 
+  // Shovels API Credit Guardrails
+  shovelsMaxDailyCredits Int?     @default(5000)
+  shovelsMaxEmployeesPerContractor Int? @default(10)
+
   // Employee Filtering
   shovelsEmployeeSeniorityFilter  String[] @default(["Senior", "Executive"])
   shovelsEmployeeDepartmentFilter String[] @default(["Operations", "Management", "Administration"])
@@ -577,6 +632,8 @@ model Settings {
   // GHL Pipeline Settings
   ghlPipelineId     String?
   ghlDefaultStageId String?
+
+  @@index([userId])
 }
 
 model Homeowner {
@@ -616,11 +673,12 @@ model Homeowner {
   geoId      String?
 
   // Permit detail fields (fetched from Shovels permits)
-  permitDate         String?
-  permitDateFriendly String?
-  permitMonthsAgo    Int?
-  permitDescription  String?
-  permitJobValue     Float?
+  permitDate                String?
+  permitDateFriendly        String?
+  permitMonthsAgo           Int?
+  permitDescription         String?
+  permitDescriptionDerived  String?
+  permitJobValue            Float?
   permitStatus       String?
   permitNumber       String?
   permitFees         Float?
@@ -665,6 +723,8 @@ model Homeowner {
   dataSources    String[] @default(["SHOVELS"])
   tags           String[] @default([])
   enrichmentData Json?
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id])
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
@@ -678,6 +738,7 @@ model Homeowner {
   @@index([realieEnriched])
   @@index([shovelsContactEnriched])
   @@index([createdAt])
+  @@index([userId])
 }
 
 model Connection {
@@ -687,9 +748,10 @@ model Connection {
   permitId          String
   permitType        String?
   permitDate        String?
-  permitJobValue    Float?
-  permitDescription String?
-  source            String   @default("shovels")
+  permitJobValue             Float?
+  permitDescription          String?
+  permitDescriptionDerived   String?
+  source                     String   @default("shovels")
   createdAt         DateTime @default(now()) @db.Timestamptz(6)
   updatedAt         DateTime @default(now()) @updatedAt @db.Timestamptz(6)
 
@@ -730,10 +792,13 @@ model MessageTemplate {
   tags        String[]        @default([])
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @default(now()) @updatedAt
+  userId      String?
+  user        User?           @relation(fields: [userId], references: [id])
 
   @@index([channel])
   @@index([isDefault])
   @@index([isActive])
+  @@index([userId])
 }
 
 model MergedContact {
@@ -802,9 +867,12 @@ model DailyMetrics {
   homeownerJobRan    Boolean  @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @default(now()) @updatedAt
+  userId             String?
+  user               User?    @relation(fields: [userId], references: [id])
 
   @@index([date])
   @@index([createdAt])
+  @@index([userId])
 }
 
 model ApolloCreditUsage {
@@ -839,12 +907,15 @@ model PermitSearch {
   googleSheetUrl  String?
   googleSheetId   String?
   conversationId  String?
+  userId          String?
+  user            User?              @relation(fields: [userId], references: [id])
   createdAt       DateTime           @default(now()) @db.Timestamptz(6)
   updatedAt       DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
 
   @@index([status])
   @@index([createdAt])
   @@index([conversationId])
+  @@index([userId])
 }
 
 enum PermitSearchStatus {
@@ -987,7 +1058,11 @@ model Conversation {
   updatedAt             DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
   summary               String?
   lastSummarizedAtCount Int       @default(0)
+  userId                String?
+  user                  User?     @relation(fields: [userId], references: [id])
   messages              Message[]
+
+  @@index([userId])
 }
 
 model Message {
