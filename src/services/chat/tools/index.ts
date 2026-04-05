@@ -3,9 +3,9 @@ import { validateToolInput } from '../tool-schemas';
 import { logger } from '../../../utils/logger';
 import { ValidationError, ExternalServiceError } from '../../../utils/errors';
 
-// Warn-mode: log validation failures but pass through original input.
-// Set TOOL_VALIDATION_MODE=reject to hard-fail on validation errors instead.
-const WARN_MODE = process.env.TOOL_VALIDATION_MODE !== 'reject';
+// Reject-mode (default): return error on validation failures.
+// Set TOOL_VALIDATION_MODE=warn to log failures but pass through original input instead.
+const WARN_MODE = process.env.TOOL_VALIDATION_MODE === 'warn';
 
 // Import all domain modules
 import { registerTools as registerPermitTools } from './permit';

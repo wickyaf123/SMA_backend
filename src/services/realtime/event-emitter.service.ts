@@ -70,8 +70,16 @@ class RealtimeEventEmitter {
   /**
    * Emit job-related events
    */
-  emitJobEvent(data: JobEventData): void {
+  emitJobEvent(data: JobEventData & { conversationId?: string }): void {
     const eventType = this.getJobEventType(data.status);
+
+    if (data.conversationId) {
+      emitToRoom(`chat:${data.conversationId}`, eventType, {
+        type: 'job',
+        ...data,
+      });
+    }
+
     broadcast(eventType, {
       type: 'job',
       ...data,

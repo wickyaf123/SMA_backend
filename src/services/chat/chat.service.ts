@@ -11,6 +11,12 @@ const MAX_HISTORY_MESSAGES = 50;
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TOOL_ITERATIONS = 10;
 
+const CONFIRMATION_REQUIRED_TOOLS = new Set([
+  'run_workflow_preset', 'delete_contact', 'delete_homeowner',
+  'delete_template', 'delete_routing_rule', 'emergency_stop',
+  'mark_as_customer', 'enroll_contacts', 'send_sms',
+]);
+
 /**
  * Ensure jerry:confirm / jerry:form / jerry:buttons blocks are wrapped in
  * triple-backtick code fences. Claude sometimes omits the fences after a
@@ -342,6 +348,7 @@ export class ChatService {
       let continueLoop = true;
       streamedText = '';
       let toolIterations = 0;
+      const toolCallCounts: Record<string, number> = {};
 
       const abortController = new AbortController();
       this.activeStreams.set(conversationId, abortController);
@@ -378,6 +385,7 @@ export class ChatService {
         // TASK 2: Wrap stream creation + consumption in retry logic
         let currentToolCalls: any[] = [];
         const preRetryLength = fullResponse.length;
+        let streamError: Error | null = null;
 
         const createAndConsumeStream = async () => {
           const stream = this.getClient().messages.stream({
@@ -391,6 +399,7 @@ export class ChatService {
           // Reset for this attempt
           currentToolCalls = [];
           streamedText = '';
+          streamError = null;
 
           stream.on('text', (text) => {
             streamedText += text;
@@ -400,6 +409,7 @@ export class ChatService {
 
           stream.on('error', (error) => {
             logger.error({ error, conversationId }, 'Stream error from Anthropic');
+            streamError = error;
           });
 
           return stream.finalMessage();
@@ -421,6 +431,10 @@ export class ChatService {
             fullResponse = fullResponse.substring(0, preRetryLength);
           },
         });
+
+        if (streamError && !finalMessage) {
+          throw streamError;
+        }
 
         // Check for tool use in the response
         const toolUseBlocks = finalMessage.content.filter(
@@ -452,6 +466,19 @@ export class ChatService {
           // Execute each tool
           const toolResults: Anthropic.ToolResultBlockParam[] = [];
           for (const toolUse of toolUseBlocks) {
+            toolCallCounts[toolUse.name] = (toolCallCounts[toolUse.name] || 0) + 1;
+            if (toolCallCounts[toolUse.name] > 5) {
+              logger.warn({ tool: toolUse.name, count: toolCallCounts[toolUse.name] }, 'Tool call limit exceeded in single turn');
+              // Return a warning result instead of executing
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: JSON.stringify({ success: false, error: `Tool "${toolUse.name}" has been called too many times in this turn. Please confirm with the user before continuing.` }),
+                is_error: true,
+              });
+              continue; // Skip execution
+            }
+
             logger.info({ tool: toolUse.name, input: toolUse.input }, 'Executing tool');
             if (onToolUse) onToolUse(toolUse.name, toolUse.input);
 
@@ -501,11 +528,9 @@ export class ChatService {
             },
           });
 
-          // If run_workflow_preset was called, force a text-only response
-          // so Claude shows the confirm card but cannot call create_workflow
-          const requiresConfirmation = toolUseBlocks.some(
-            t => t.name === 'run_workflow_preset'
-          );
+          // If a destructive/sensitive tool was called, force a text-only response
+          // so Claude shows the confirm card and cannot chain further tool calls
+          const requiresConfirmation = toolUseBlocks.some(t => CONFIRMATION_REQUIRED_TOOLS.has(t.name));
 
           if (requiresConfirmation) {
             const confirmStream = this.getClient().messages.stream({

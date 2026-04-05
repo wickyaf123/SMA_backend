@@ -221,7 +221,7 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
       });
     });
 
-    socket.on('job:cancel', async (data: { jobId: string; conversationId: string }) => {
+    socket.on('job:cancel', async (data: { jobId: string; conversationId: string; jobType?: string }) => {
       logger.info({ socketId: socket.id, jobId: data.jobId }, 'Client requested job cancel');
       const { cancelJob, clearJobSignal } = require('../services/scraper/shovels.service');
       cancelJob(data.jobId);
@@ -241,9 +241,9 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
       const room = `chat:${data.conversationId}`;
       io?.to(room).emit(WSEventType.JOB_FAILED, {
         jobId: data.jobId,
-        jobType: 'permit:search',
+        jobType: data.jobType || 'unknown',
         status: 'cancelled',
-        result: { message: 'Search cancelled by user' },
+        result: { message: 'Job cancelled by user' },
         timestamp: new Date().toISOString(),
       });
 

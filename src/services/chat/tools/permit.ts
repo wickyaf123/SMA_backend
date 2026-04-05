@@ -150,6 +150,10 @@ const handlers: Record<string, ToolHandler> = {
       },
     });
 
+    if (!context?.conversationId) {
+      logger.warn({ tool: 'search_permits' }, 'Tool called without conversationId - data will be unscoped');
+    }
+
     // Use scrapeByCity for multi-tier fallback (slug -> zip expansion -> FIPS)
     const runSearch = async () => {
       await prisma.permitSearch.update({
