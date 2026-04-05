@@ -127,7 +127,7 @@ export class ConnectionService {
     homeownerId: string,
     contractorShovelsId: string,
     permitId: string,
-    permitData: { type?: string | null; issue_date?: string | null; start_date?: string | null; file_date?: string | null; job_value?: number | null; description?: string | null; tags?: string[] | null }
+    permitData: { type?: string | null; issue_date?: string | null; start_date?: string | null; file_date?: string | null; job_value?: number | null; description?: string | null; description_derived?: string | null; tags?: string[] | null }
   ): Promise<boolean> {
     try {
       const contact = await prisma.contact.findFirst({
