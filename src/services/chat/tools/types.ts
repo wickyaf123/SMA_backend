@@ -15,6 +15,7 @@ export interface ToolResult {
 
 export interface ToolContext {
   conversationId?: string;
+  signal?: AbortSignal;
 }
 
 export type ToolHandler = (

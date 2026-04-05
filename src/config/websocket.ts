@@ -221,6 +221,16 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
       });
     });
 
+    socket.on('workflow:cancel', async (data: { workflowId: string; conversationId: string }) => {
+      logger.info({ socketId: socket.id, workflowId: data.workflowId }, 'Client requested workflow cancel');
+      try {
+        const { workflowEngine } = await import('../services/workflow/workflow.engine');
+        await workflowEngine.cancelWorkflow(data.workflowId);
+      } catch (err) {
+        logger.error({ err, workflowId: data.workflowId }, 'Failed to cancel workflow');
+      }
+    });
+
     socket.on('job:cancel', async (data: { jobId: string; conversationId: string; jobType?: string }) => {
       logger.info({ socketId: socket.id, jobId: data.jobId }, 'Client requested job cancel');
       const { cancelJob, clearJobSignal } = require('../services/scraper/shovels.service');

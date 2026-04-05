@@ -26,6 +26,8 @@ import {
   emitWorkflowCancelled,
 } from '../../config/websocket';
 
+const activeAbortControllers = new Map<string, AbortController>();
+
 // ==================== TYPES ====================
 
 /** Value is taken from `CreateWorkflowInput.runtimeParams` at execution (not `$ref`-chainable). */
@@ -167,6 +169,9 @@ class WorkflowEngine {
       },
     });
 
+    const abortController = new AbortController();
+    activeAbortControllers.set(workflowId, abortController);
+
     const conversationId = workflow.conversationId || '';
 
     emitWorkflowStarted(conversationId, {
@@ -191,13 +196,15 @@ class WorkflowEngine {
           select: { status: true },
         });
 
-        if (!currentWorkflow || currentWorkflow.status === 'CANCELLED') {
+        if (!currentWorkflow || currentWorkflow.status === 'CANCELLED' || abortController.signal.aborted) {
           workflowLogger.info('Workflow was cancelled during execution');
+          activeAbortControllers.delete(workflowId);
           return;
         }
 
         if (currentWorkflow.status === 'PAUSED') {
           workflowLogger.info('Workflow is paused, stopping execution');
+          activeAbortControllers.delete(workflowId);
           return;
         }
 
@@ -261,8 +268,10 @@ class WorkflowEngine {
         workflowLogger.info({ stepOrder: step.order, stepName: step.name, action: step.action }, 'Executing step');
 
         try {
-          // Execute the tool action
-          const result = await executeTool(step.action, resolvedInput);
+          const result = await executeTool(step.action, resolvedInput, {
+            conversationId: conversationId || undefined,
+            signal: abortController.signal,
+          });
 
           if (!result.success) {
             throw new Error(result.error || `Tool ${step.action} returned failure`);
@@ -371,7 +380,6 @@ class WorkflowEngine {
             const maxStepRetries = planStep?.maxRetries ?? 3;
 
             if (currentRetryCount > maxStepRetries) {
-              // Max retries exceeded - treat as abort
               workflowLogger.warn(
                 { stepOrder: step.order, stepName: step.name, retryCount: currentRetryCount, maxRetries: maxStepRetries },
                 'Step max retries exceeded, aborting workflow'
@@ -386,7 +394,6 @@ class WorkflowEngine {
                 },
               });
 
-              // Mark remaining steps as SKIPPED
               await prisma.workflowStep.updateMany({
                 where: {
                   workflowId,
@@ -410,6 +417,7 @@ class WorkflowEngine {
                 error: `Step ${step.order} (${step.name}) failed after ${currentRetryCount - 1} retries: ${errorMessage}`,
               });
 
+              activeAbortControllers.delete(workflowId);
               return;
             }
 
@@ -429,6 +437,12 @@ class WorkflowEngine {
               'Step marked for retry with exponential backoff'
             );
 
+            // Set to PENDING *before* enqueuing so the worker's PENDING guard passes
+            await prisma.workflow.update({
+              where: { id: workflowId },
+              data: { status: 'PENDING' },
+            });
+
             await workflowQueue.add(
               `workflow-retry-${workflowId}-step-${step.order}`,
               { workflowId, stepOrder: step.order },
@@ -438,12 +452,8 @@ class WorkflowEngine {
               }
             );
 
-            await prisma.workflow.update({
-              where: { id: workflowId },
-              data: { status: 'PAUSED' },
-            });
-
-            workflowLogger.info({ stepOrder: step.order }, 'Step marked for retry, workflow paused');
+            activeAbortControllers.delete(workflowId);
+            workflowLogger.info({ stepOrder: step.order }, 'Step marked for retry, workflow re-enqueued');
             return;
 
           } else {
@@ -493,6 +503,7 @@ class WorkflowEngine {
         result: finalResult,
       });
 
+      activeAbortControllers.delete(workflowId);
       workflowLogger.info({ completedSteps: completedCount }, 'Workflow completed');
 
     } catch (error: any) {
@@ -513,6 +524,8 @@ class WorkflowEngine {
         workflowId,
         error: errorMessage,
       });
+
+      activeAbortControllers.delete(workflowId);
     }
   }
 
@@ -532,6 +545,25 @@ class WorkflowEngine {
     if (workflow.status === 'COMPLETED' || workflow.status === 'CANCELLED') {
       logger.warn({ workflowId, status: workflow.status }, 'Cannot cancel workflow in terminal state');
       return workflow;
+    }
+
+    // Abort in-flight tool execution
+    const controller = activeAbortControllers.get(workflowId);
+    if (controller) {
+      controller.abort();
+      activeAbortControllers.delete(workflowId);
+    }
+
+    // Remove pending BullMQ job so the worker doesn't pick it up again
+    try {
+      const bullJobId = `workflow-${workflowId}`;
+      const job = await workflowQueue.getJob(bullJobId);
+      if (job) {
+        await job.remove();
+        logger.debug({ workflowId, bullJobId }, 'Removed BullMQ job on cancel');
+      }
+    } catch (err) {
+      logger.warn({ err, workflowId }, 'Could not remove BullMQ job during cancel (may already be active)');
     }
 
     // Mark remaining pending/running steps as SKIPPED
