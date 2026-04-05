@@ -220,7 +220,7 @@ const handlers: Record<string, ToolHandler> = {
           onFailure: s.onFailure,
         })),
         totalSteps: stepsWithOverrides.length,
-        message: `Workflow preset "${preset.name}" ready to execute with ${stepsWithOverrides.length} steps. Use create_workflow to start it.`,
+        message: `Workflow preset "${preset.name}" ready to execute with ${stepsWithOverrides.length} steps. Present this plan to the user as a jerry:confirm block and wait for their confirmation before calling create_workflow.`,
       },
     };
   },

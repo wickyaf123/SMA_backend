@@ -501,8 +501,33 @@ export class ChatService {
             },
           });
 
-          fullResponse = ''; // Reset for final response after tool results
-          continueLoop = true; // Continue the loop to get Claude's response after tool results
+          // If run_workflow_preset was called, force a text-only response
+          // so Claude shows the confirm card but cannot call create_workflow
+          const requiresConfirmation = toolUseBlocks.some(
+            t => t.name === 'run_workflow_preset'
+          );
+
+          if (requiresConfirmation) {
+            const confirmStream = this.getClient().messages.stream({
+              model: MODEL,
+              max_tokens: 4096,
+              system: JERRY_SYSTEM_PROMPT,
+              messages: claudeMessages,
+              // No tools — text-only response for the confirm card
+            }, { signal: abortController.signal });
+            streamedText = '';
+            fullResponse = '';
+            confirmStream.on('text', (text) => {
+              streamedText += text;
+              fullResponse += text;
+              if (onToken) onToken(text);
+            });
+            await confirmStream.finalMessage();
+            // Loop ends — user must send CONFIRM to trigger create_workflow
+          } else {
+            fullResponse = ''; // Reset for final response after tool results
+            continueLoop = true; // Continue the loop to get Claude's response after tool results
+          }
         }
       }
 

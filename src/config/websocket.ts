@@ -355,10 +355,11 @@ export function emitWorkflowStarted(conversationId: string, data: {
   name: string;
   totalSteps: number;
 }): void {
+  const payload = { ...data, conversationId };
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STARTED, data);
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STARTED, payload);
   }
-  broadcast(WSEventType.WORKFLOW_STARTED, data);
+  broadcast(WSEventType.WORKFLOW_STARTED, payload);
 }
 
 /**
@@ -370,10 +371,11 @@ export function emitWorkflowStepStarted(conversationId: string, data: {
   stepName: string;
   action: string;
 }): void {
+  const payload = { ...data, conversationId };
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_STARTED, data);
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_STARTED, payload);
   }
-  broadcast(WSEventType.WORKFLOW_STEP_STARTED, data);
+  broadcast(WSEventType.WORKFLOW_STEP_STARTED, payload);
 }
 
 /**
@@ -385,10 +387,11 @@ export function emitWorkflowStepProgress(conversationId: string, data: {
   progress: number;
   progressTotal?: number;
 }): void {
+  const payload = { ...data, conversationId };
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_PROGRESS, data);
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_PROGRESS, payload);
   }
-  broadcast(WSEventType.WORKFLOW_STEP_PROGRESS, data);
+  broadcast(WSEventType.WORKFLOW_STEP_PROGRESS, payload);
 }
 
 /**
@@ -399,10 +402,11 @@ export function emitWorkflowStepCompleted(conversationId: string, data: {
   stepOrder: number;
   output: any;
 }): void {
+  const payload = { ...data, conversationId };
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_COMPLETED, data);
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_COMPLETED, payload);
   }
-  broadcast(WSEventType.WORKFLOW_STEP_COMPLETED, data);
+  broadcast(WSEventType.WORKFLOW_STEP_COMPLETED, payload);
 }
 
 /**
@@ -414,10 +418,11 @@ export function emitWorkflowStepFailed(conversationId: string, data: {
   error: string;
   onFailure: string;
 }): void {
+  const payload = { ...data, conversationId };
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_FAILED, data);
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_FAILED, payload);
   }
-  broadcast(WSEventType.WORKFLOW_STEP_FAILED, data);
+  broadcast(WSEventType.WORKFLOW_STEP_FAILED, payload);
 }
 
 /**
@@ -428,10 +433,11 @@ export function emitWorkflowStepSkipped(conversationId: string, data: {
   stepOrder: number;
   reason: string;
 }): void {
+  const payload = { ...data, conversationId };
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_SKIPPED, data);
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_STEP_SKIPPED, payload);
   }
-  broadcast(WSEventType.WORKFLOW_STEP_SKIPPED, data);
+  broadcast(WSEventType.WORKFLOW_STEP_SKIPPED, payload);
 }
 
 /**
@@ -441,10 +447,11 @@ export function emitWorkflowCompleted(conversationId: string, data: {
   workflowId: string;
   result: any;
 }): void {
+  const payload = { ...data, conversationId };
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_COMPLETED, data);
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_COMPLETED, payload);
   }
-  broadcast(WSEventType.WORKFLOW_COMPLETED, data);
+  broadcast(WSEventType.WORKFLOW_COMPLETED, payload);
 }
 
 /**
@@ -454,10 +461,11 @@ export function emitWorkflowFailed(conversationId: string, data: {
   workflowId: string;
   error: string;
 }): void {
+  const payload = { ...data, conversationId };
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_FAILED, data);
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_FAILED, payload);
   }
-  broadcast(WSEventType.WORKFLOW_FAILED, data);
+  broadcast(WSEventType.WORKFLOW_FAILED, payload);
 }
 
 /**
@@ -466,9 +474,10 @@ export function emitWorkflowFailed(conversationId: string, data: {
 export function emitWorkflowCancelled(conversationId: string, data: {
   workflowId: string;
 }): void {
+  const payload = { ...data, conversationId };
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_CANCELLED, data);
+    emitToRoom(`chat:${conversationId}`, WSEventType.WORKFLOW_CANCELLED, payload);
   }
-  broadcast(WSEventType.WORKFLOW_CANCELLED, data);
+  broadcast(WSEventType.WORKFLOW_CANCELLED, payload);
 }
 
