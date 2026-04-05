@@ -7,6 +7,7 @@ import { requestIdMiddleware } from './middleware/requestId';
 import { requestLogger } from './middleware/requestLogger';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { globalRateLimiter } from './middleware/rateLimit';
+import routes from './routes';
 
 /**
  * Create and configure Express application
@@ -63,8 +64,7 @@ export function createApp(): Express {
   // Global rate limiting
   app.use(globalRateLimiter);
 
-  // Import and use routes
-  const routes = require('./routes').default;
+  // Routes
   app.use('/', routes);
 
   // 404 handler
