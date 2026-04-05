@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { chatService } from '../services/chat/chat.service';
 import { getIO } from '../config/websocket';
 import { logger } from '../utils/logger';
-import { sendSuccess } from '../utils/response';
+import { sendSuccess, sendError } from '../utils/response';
 import { prisma } from '../config/database';
 
 export class ChatController {
@@ -53,7 +53,7 @@ export class ChatController {
       const { content } = req.body;
 
       if (!content || typeof content !== 'string') {
-        res.status(400).json({ success: false, error: 'Message content is required' });
+        sendError(res, 400, 'Message content is required', 'VALIDATION_ERROR');
         return;
       }
 
@@ -123,7 +123,7 @@ export class ChatController {
       const { rating, comment } = req.body;
 
       if (!rating || !['up', 'down'].includes(rating)) {
-        res.status(400).json({ success: false, error: 'Rating must be "up" or "down"' });
+        sendError(res, 400, 'Rating must be "up" or "down"', 'VALIDATION_ERROR');
         return;
       }
 
@@ -157,7 +157,7 @@ export class ChatController {
       const { id: conversationId } = req.params;
 
       if (!req.file) {
-        res.status(400).json({ success: false, error: 'No file uploaded' });
+        sendError(res, 400, 'No file uploaded', 'VALIDATION_ERROR');
         return;
       }
 
@@ -165,7 +165,7 @@ export class ChatController {
       const lines = csvContent.split('\n').filter(l => l.trim());
 
       if (lines.length < 2) {
-        res.status(400).json({ success: false, error: 'CSV file is empty or has no data rows' });
+        sendError(res, 400, 'CSV file is empty or has no data rows', 'VALIDATION_ERROR');
         return;
       }
 

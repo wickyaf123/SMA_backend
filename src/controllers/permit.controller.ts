@@ -3,6 +3,7 @@ import { permitPipelineService } from '../services/permit/permit-pipeline.servic
 import { prisma } from '../config/database';
 import { shovelsClient } from '../integrations/shovels/client';
 import { logger } from '../utils/logger';
+import { sendSuccess, sendError } from '../utils/response';
 
 export class PermitController {
   async search(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -11,10 +12,7 @@ export class PermitController {
       const userId = req.user?.userId;
 
       if (!permitType || !city || !geoId || !startDate || !endDate) {
-        res.status(400).json({
-          success: false,
-          error: 'Missing required fields: permitType, city, geoId, startDate, endDate',
-        });
+        sendError(res, 400, 'Missing required fields: permitType, city, geoId, startDate, endDate', 'VALIDATION_ERROR');
         return;
       }
 
@@ -22,10 +20,7 @@ export class PermitController {
         permitType, city, geoId, startDate, endDate, userId,
       });
 
-      res.status(202).json({
-        success: true,
-        data: { searchId, status: 'SEARCHING' },
-      });
+      sendSuccess(res, { searchId, status: 'SEARCHING' }, 202);
     } catch (error) {
       next(error);
     }
@@ -38,10 +33,10 @@ export class PermitController {
         where: { id: req.params.id },
       });
       if (!search || (userId && search.userId && search.userId !== userId)) {
-        res.status(404).json({ success: false, error: 'Search not found' });
+        sendError(res, 404, 'Search not found');
         return;
       }
-      res.json({ success: true, data: search });
+      sendSuccess(res, search);
     } catch (error) {
       next(error);
     }
@@ -58,7 +53,7 @@ export class PermitController {
         orderBy: { createdAt: 'desc' },
         take: 50,
       });
-      res.json({ success: true, data: searches });
+      sendSuccess(res, searches);
     } catch (error) {
       next(error);
     }
@@ -74,7 +69,7 @@ export class PermitController {
         where,
         orderBy: { createdAt: 'desc' },
       });
-      res.json({ success: true, data: search });
+      sendSuccess(res, search);
     } catch (error) {
       next(error);
     }
@@ -87,7 +82,7 @@ export class PermitController {
 
       const { permitRoutingService } = await import('../services/permit/routing.service');
       const result = await permitRoutingService.routeSearch(id, routeMode);
-      res.json({ success: true, data: result });
+      sendSuccess(res, result);
     } catch (error) {
       next(error);
     }
@@ -97,7 +92,7 @@ export class PermitController {
     try {
       const { id } = req.params;
       const result = await permitPipelineService.approveAndRoute(id);
-      res.json({ success: true, data: result });
+      sendSuccess(res, result);
     } catch (error) {
       next(error);
     }
@@ -106,7 +101,7 @@ export class PermitController {
   async status(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const connected = await shovelsClient.checkHealth();
-      res.json({ success: true, data: { status: 'ok', shovels_connected: connected } });
+      sendSuccess(res, { status: 'ok', shovels_connected: connected });
     } catch (error) {
       next(error);
     }

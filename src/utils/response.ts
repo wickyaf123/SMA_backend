@@ -108,3 +108,41 @@ export function errorResponse(message: string, statusCode?: number, details?: an
   };
 }
 
+/**
+ * Send error response with consistent format
+ * Use this in controllers for inline error responses (validation, not-found, etc.)
+ */
+export function sendError(
+  res: Response,
+  statusCode: number,
+  message: string,
+  code?: string
+): Response {
+  return res.status(statusCode).json({
+    success: false,
+    error: {
+      code: code || statusCodeToErrorCode(statusCode),
+      message,
+    },
+    meta: {
+      timestamp: new Date().toISOString(),
+    },
+  });
+}
+
+/**
+ * Map HTTP status codes to default error code strings
+ */
+function statusCodeToErrorCode(statusCode: number): string {
+  switch (statusCode) {
+    case 400: return 'VALIDATION_ERROR';
+    case 401: return 'AUTHENTICATION_ERROR';
+    case 403: return 'AUTHORIZATION_ERROR';
+    case 404: return 'NOT_FOUND';
+    case 409: return 'CONFLICT';
+    case 410: return 'GONE';
+    case 429: return 'RATE_LIMIT_EXCEEDED';
+    default: return 'INTERNAL_ERROR';
+  }
+}
+

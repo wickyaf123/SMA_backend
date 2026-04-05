@@ -168,13 +168,14 @@ export class JobLogService {
     const completed = jobs.filter((j: any) => j.status === 'COMPLETED').length;
     const failed = jobs.filter((j: any) => j.status === 'FAILED').length;
     const totalRecords = jobs.reduce((sum: number, j: any) => sum + (j.totalRecords || 0), 0);
-    const avgDuration =
-      jobs
-        .filter((j: any) => j.startedAt && j.completedAt)
-        .reduce((sum: number, j: any) => {
-          const duration = j.completedAt!.getTime() - j.startedAt!.getTime();
-          return sum + duration;
-        }, 0) / jobs.length;
+    const completedWithDuration = jobs.filter((j: any) => j.startedAt && j.completedAt);
+    const totalDuration = completedWithDuration.reduce((sum: number, j: any) => {
+      const duration = j.completedAt!.getTime() - j.startedAt!.getTime();
+      return sum + duration;
+    }, 0);
+    const avgDuration = completedWithDuration.length > 0
+      ? totalDuration / completedWithDuration.length
+      : 0;
 
     return {
       total: jobs.length,

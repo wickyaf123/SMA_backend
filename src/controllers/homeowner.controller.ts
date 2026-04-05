@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/database';
-import { sendSuccess } from '../utils/response';
+import { sendSuccess, sendError } from '../utils/response';
 import { logger } from '../utils/logger';
 import { realieEnrichmentService } from '../services/enrichment/realie.service';
 import { shovelsHomeownerEnrichmentService } from '../services/enrichment/shovels-homeowner.service';
@@ -79,7 +79,7 @@ export class HomeownerController {
       });
 
       if (!homeowner) {
-        res.status(404).json({ success: false, error: 'Homeowner not found' });
+        sendError(res, 404, 'Homeowner not found');
         return;
       }
 

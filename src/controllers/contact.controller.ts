@@ -4,7 +4,7 @@ import { leadIngestionService } from '../services/lead/ingestion.service';
 import { importJobService } from '../services/import/import-job.service';
 import { settingsService } from '../services/settings/settings.service';
 import { buildSearchParamsForIndustry } from '../integrations/apollo/normalizer';
-import { successResponse, errorResponse } from '../utils/response';
+import { successResponse, errorResponse, sendError } from '../utils/response';
 import { logger } from '../utils/logger';
 import multer from 'multer';
 
@@ -196,10 +196,7 @@ export class ContactController {
     res: Response,
     _next: NextFunction
   ): Promise<void> {
-    res.status(410).json({
-      success: false,
-      error: 'Apollo import has been deprecated. Use the Shovels permit scraper instead.',
-    });
+    sendError(res, 410, 'Apollo import has been deprecated. Use the Shovels permit scraper instead.', 'GONE');
   }
 
   /**

@@ -103,8 +103,7 @@ export class ChatService {
 
     const result = await prisma.conversation.deleteMany({ where });
     if (result.count === 0) {
-      logger.warn({ conversationId: id }, 'Conversation not found for deletion, skipping');
-      return;
+      throw new NotFoundError('Conversation', id);
     }
     logger.info({ conversationId: id }, 'Deleted conversation');
   }

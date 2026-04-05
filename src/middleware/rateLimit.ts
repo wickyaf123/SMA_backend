@@ -1,5 +1,4 @@
 import rateLimit from 'express-rate-limit';
-import { RateLimitError } from '../utils/errors';
 
 /**
  * Global API rate limiter
@@ -11,8 +10,16 @@ export const globalRateLimiter = rateLimit({
   message: 'Too many requests from this IP, please try again later',
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => {
-    throw new RateLimitError('Too many requests, please try again later', 900);
+  handler: (_req, res) => {
+    res.status(429).json({
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many requests, please try again later',
+        details: { retryAfter: 900 },
+      },
+      meta: { timestamp: new Date().toISOString() },
+    });
   },
 });
 
@@ -25,8 +32,16 @@ export const strictRateLimiter = rateLimit({
   message: 'Too many requests, please slow down',
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => {
-    throw new RateLimitError('Rate limit exceeded for this operation', 60);
+  handler: (_req, res) => {
+    res.status(429).json({
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Rate limit exceeded for this operation',
+        details: { retryAfter: 60 },
+      },
+      meta: { timestamp: new Date().toISOString() },
+    });
   },
 });
 
@@ -40,8 +55,16 @@ export const authRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  handler: (req, res) => {
-    throw new RateLimitError('Too many authentication attempts', 900);
+  handler: (_req, res) => {
+    res.status(429).json({
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many authentication attempts',
+        details: { retryAfter: 900 },
+      },
+      meta: { timestamp: new Date().toISOString() },
+    });
   },
 });
 
@@ -59,8 +82,16 @@ export const chatRateLimiter = rateLimit({
     // Key by IP + conversation ID for more granular limiting
     return `${req.ip}-${req.params?.id || 'unknown'}`;
   },
-  handler: (req, res) => {
-    throw new RateLimitError('Chat rate limit exceeded. Please wait before sending more messages.', 60);
+  handler: (_req, res) => {
+    res.status(429).json({
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Chat rate limit exceeded. Please wait before sending more messages.',
+        details: { retryAfter: 60 },
+      },
+      meta: { timestamp: new Date().toISOString() },
+    });
   },
 });
 

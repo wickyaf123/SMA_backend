@@ -5,6 +5,7 @@ import { phantomBusterWebhookController } from '../controllers/webhook/phantombu
 import { ghlWebhookController } from '../controllers/webhook/ghl.controller';
 import { handleClayWebhook } from '../controllers/webhook/clay.controller';
 import { webhookLogController } from '../controllers/webhook-log.controller';
+import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
@@ -43,20 +44,23 @@ router.post(
 router.post('/clay', handleClayWebhook);
 
 /**
- * Webhook Logs
+ * Webhook Logs (require authentication)
  */
 router.get(
   '/logs',
+  authMiddleware,
   webhookLogController.getLogs.bind(webhookLogController)
 );
 
 router.get(
   '/logs/recent',
+  authMiddleware,
   webhookLogController.getRecent.bind(webhookLogController)
 );
 
 router.get(
   '/logs/stats',
+  authMiddleware,
   webhookLogController.getStats.bind(webhookLogController)
 );
 

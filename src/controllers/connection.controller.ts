@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { connectionService } from '../services/connection/connection.service';
-import { sendSuccess } from '../utils/response';
+import { sendSuccess, sendError } from '../utils/response';
 import { logger } from '../utils/logger';
 
 export class ConnectionController {
@@ -41,7 +41,7 @@ export class ConnectionController {
       const connection = await connectionService.get(req.params.id);
 
       if (!connection) {
-        res.status(404).json({ success: false, error: 'Connection not found' });
+        sendError(res, 404, 'Connection not found');
         return;
       }
 

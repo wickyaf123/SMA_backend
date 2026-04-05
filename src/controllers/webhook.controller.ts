@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
-import { successResponse } from '../utils/response';
+import { successResponse, sendError } from '../utils/response';
 import { ApolloMobilePhoneWebhookPayload } from '../integrations/apollo/types';
 
 /**
@@ -43,7 +43,7 @@ export class WebhookController {
 
       if (!people || people.length === 0) {
         logger.warn({ body: req.body }, 'Invalid Apollo webhook payload - no people data');
-        res.status(400).json({ error: 'Invalid payload' });
+        sendError(res, 400, 'Invalid payload', 'VALIDATION_ERROR');
         return;
       }
 
