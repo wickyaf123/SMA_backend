@@ -5,14 +5,14 @@ import { logger } from '../../utils/logger';
 import { NotFoundError, RateLimitError } from '../../utils/errors';
 import { retryWithBackoff } from '../../utils/retry';
 import { toolDefinitions, executeTool } from './tools/index';
-import { JERRY_SYSTEM_PROMPT } from './system-prompt';
+import { getJerrySystemPrompt } from './system-prompt';
 
 const MAX_HISTORY_MESSAGES = 50;
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TOOL_ITERATIONS = 10;
 
 const CONFIRMATION_REQUIRED_TOOLS = new Set([
-  'run_workflow_preset', 'delete_contact', 'delete_homeowner',
+  'delete_contact', 'delete_homeowner',
   'delete_template', 'delete_routing_rule', 'emergency_stop',
   'mark_as_customer', 'enroll_contacts', 'send_sms',
 ]);
@@ -368,7 +368,7 @@ export class ChatService {
           const finalStream = this.getClient().messages.stream({
             model: MODEL,
             max_tokens: 4096,
-            system: JERRY_SYSTEM_PROMPT,
+            system: getJerrySystemPrompt(),
             messages: claudeMessages,
             // No tools - force text-only response
           }, { signal: abortController.signal });
@@ -391,7 +391,7 @@ export class ChatService {
           const stream = this.getClient().messages.stream({
             model: MODEL,
             max_tokens: 4096,
-            system: JERRY_SYSTEM_PROMPT,
+            system: getJerrySystemPrompt(),
             messages: claudeMessages,
             tools,
           }, { signal: abortController.signal });
@@ -536,7 +536,7 @@ export class ChatService {
             const confirmStream = this.getClient().messages.stream({
               model: MODEL,
               max_tokens: 4096,
-              system: JERRY_SYSTEM_PROMPT,
+              system: getJerrySystemPrompt(),
               messages: claudeMessages,
               // No tools — text-only response for the confirm card
             }, { signal: abortController.signal });

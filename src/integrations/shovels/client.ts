@@ -9,6 +9,8 @@ import type {
   ShovelsPermit,
   ShovelsResident,
   ShovelsApiResponse,
+  ShovelsUsageResponse,
+  ShovelsQuotaStatus,
 } from './types';
 
 export { ShovelsCreditLimitError };
@@ -304,6 +306,56 @@ export class ShovelsClient {
     return {
       todayUsed: await getCreditsUsedToday(),
       dailyLimit: this.dailyCreditLimit,
+    };
+  }
+
+  /**
+   * Fetch monthly credit usage from the Shovels API (rolling 30-day window).
+   * Does NOT consume credits. Returns null on failure so callers can degrade gracefully.
+   */
+  async getUsage(): Promise<ShovelsUsageResponse | null> {
+    try {
+      const response = await this.client.get<ShovelsUsageResponse>('/usage');
+      return response.data;
+    } catch (err: any) {
+      logger.warn({ error: err.message }, 'Failed to fetch Shovels usage — quota check unavailable');
+      return null;
+    }
+  }
+
+  /**
+   * Pre-flight quota check: returns structured status with usage percentage
+   * and actionable fields for the caller to decide warn/block.
+   */
+  async checkQuota(): Promise<ShovelsQuotaStatus> {
+    const usage = await this.getUsage();
+
+    if (!usage) {
+      return {
+        creditsUsed: 0,
+        creditLimit: null,
+        isOverLimit: false,
+        availableAt: null,
+        usagePercent: 0,
+        creditsRemaining: null,
+      };
+    }
+
+    const remaining = usage.credit_limit != null
+      ? Math.max(0, usage.credit_limit - usage.credits_used)
+      : null;
+
+    const pct = usage.credit_limit != null && usage.credit_limit > 0
+      ? Math.round((usage.credits_used / usage.credit_limit) * 100)
+      : 0;
+
+    return {
+      creditsUsed: usage.credits_used,
+      creditLimit: usage.credit_limit,
+      isOverLimit: usage.is_over_limit,
+      availableAt: usage.available_at,
+      usagePercent: pct,
+      creditsRemaining: remaining,
     };
   }
 }

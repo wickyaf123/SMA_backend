@@ -175,7 +175,7 @@ const handlers: Record<string, ToolHandler> = {
     };
   },
 
-  run_workflow_preset: async (input) => {
+  run_workflow_preset: async (input, context) => {
     const preset = getPresetById(input.presetId);
     if (!preset) {
       return {
@@ -189,7 +189,6 @@ const handlers: Record<string, ToolHandler> = {
     const stepsWithOverrides = preset.steps.map((step) => {
       const mergedParams = { ...step.params };
       if (input.params) {
-        // Apply override params to any step that has matching keys
         for (const [key, value] of Object.entries(input.params)) {
           if (key in mergedParams) {
             (mergedParams as Record<string, any>)[key] = value;
@@ -204,23 +203,22 @@ const handlers: Record<string, ToolHandler> = {
       };
     });
 
-    // Return the preset plan for Jerry to show as a confirmation card
-    // Don't auto-execute — let Jerry confirm first
+    // Execute directly — no confirmation needed for preset workflows
+    const workflow = await workflowEngine.createWorkflow({
+      conversationId: context?.conversationId || input.conversationId,
+      name: preset.name,
+      description: preset.description,
+      steps: stepsWithOverrides,
+    });
+
     return {
       success: true,
       data: {
-        presetId: preset.id,
-        presetName: preset.name,
-        description: preset.description,
-        steps: stepsWithOverrides.map((s, i) => ({
-          order: i + 1,
-          name: s.name,
-          action: s.action,
-          params: s.params,
-          onFailure: s.onFailure,
-        })),
-        totalSteps: stepsWithOverrides.length,
-        message: `Workflow preset "${preset.name}" ready to execute with ${stepsWithOverrides.length} steps. Present this plan to the user as a jerry:confirm block and wait for their confirmation before calling create_workflow.`,
+        workflowId: workflow.id,
+        name: workflow.name,
+        status: workflow.status,
+        totalSteps: workflow.totalSteps,
+        message: `Workflow "${workflow.name}" created and queued for execution with ${workflow.totalSteps} steps. ID: ${workflow.id}. The workflow is now running — results will arrive via WebSocket events.`,
       },
     };
   },

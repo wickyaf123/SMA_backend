@@ -4,7 +4,7 @@ export interface ToolDefinition {
   input_schema: Record<string, any>;
 }
 
-export type ToolErrorCode = 'VALIDATION' | 'PRECONDITION' | 'SERVICE' | 'INTEGRATION' | 'INTERNAL';
+export type ToolErrorCode = 'VALIDATION' | 'PRECONDITION' | 'SERVICE' | 'INTEGRATION' | 'INTERNAL' | 'QUOTA_EXCEEDED';
 
 export interface ToolResult {
   success: boolean;

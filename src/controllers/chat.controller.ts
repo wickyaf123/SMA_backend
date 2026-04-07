@@ -4,6 +4,8 @@ import { getIO } from '../config/websocket';
 import { logger } from '../utils/logger';
 import { sendSuccess, sendError } from '../utils/response';
 import { prisma } from '../config/database';
+import { getPresetById } from '../services/workflow/workflow-presets';
+import { workflowEngine } from '../services/workflow/workflow.engine';
 
 export class ChatController {
   async createConversation(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -186,6 +188,55 @@ export class ChatController {
         storedKey: dataKey,
       });
     } catch (error) {
+      next(error);
+    }
+  }
+
+  async runWorkflowPreset(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id: conversationId, presetId } = req.params;
+
+      const preset = getPresetById(presetId);
+      if (!preset) {
+        sendError(res, 404, `Workflow preset "${presetId}" not found`, 'NOT_FOUND');
+        return;
+      }
+
+      // Merge any override params from request body
+      const overrideParams = req.body?.params || {};
+      const steps = preset.steps.map((step) => {
+        const mergedParams = { ...step.params };
+        if (overrideParams) {
+          for (const [key, value] of Object.entries(overrideParams)) {
+            if (key in mergedParams) {
+              (mergedParams as Record<string, any>)[key] = value;
+            }
+          }
+        }
+        return {
+          name: step.name,
+          action: step.action,
+          params: mergedParams,
+          onFailure: step.onFailure || 'skip',
+        };
+      });
+
+      const workflow = await workflowEngine.createWorkflow({
+        conversationId,
+        name: preset.name,
+        description: preset.description,
+        steps,
+      });
+
+      logger.info({ workflowId: workflow.id, presetId, conversationId }, 'Workflow preset executed directly');
+
+      sendSuccess(res, {
+        workflowId: workflow.id,
+        name: workflow.name,
+        totalSteps: workflow.totalSteps,
+      }, 201);
+    } catch (error) {
+      logger.error({ error, presetId: req.params.presetId }, 'Error running workflow preset');
       next(error);
     }
   }

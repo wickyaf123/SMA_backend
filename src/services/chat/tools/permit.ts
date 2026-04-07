@@ -4,6 +4,7 @@ import { logger } from '../../../utils/logger';
 import { config } from '../../../config';
 import { permitPipelineService } from '../../permit/permit-pipeline.service';
 import { shovelsScraperService, cancelJob, clearJobSignal } from '../../scraper/shovels.service';
+import { shovelsClient, ShovelsCreditLimitError } from '../../../integrations/shovels/client';
 import { lookupGeoId } from '../../../data/geo-ids';
 import { emitJobToConversation, WSEventType } from '../../../config/websocket';
 import { realtimeEmitter } from '../../realtime/event-emitter.service';
@@ -102,6 +103,40 @@ const definitions: ToolDefinition[] = [
   },
 ];
 
+function classifySearchError(err: any): string {
+  if (err instanceof ShovelsCreditLimitError) {
+    return 'Shovels daily credit limit reached — no more API calls allowed today. Contact Stark to adjust the daily cap.';
+  }
+
+  const status = err.response?.status;
+  const detail = err.response?.data?.detail;
+
+  if (status === 402) {
+    const limitInfo = typeof detail === 'object' && detail?.limit
+      ? ` (plan limit: ${Number(detail.limit).toLocaleString()} credits)`
+      : '';
+    return `Shovels API monthly credit limit exceeded${limitInfo}. Contact Stark to reset or upgrade the Shovels plan.`;
+  }
+
+  if (status === 429) {
+    return 'Shovels API rate limit hit — too many requests. The search will be retried automatically, but if this persists, contact Stark.';
+  }
+
+  if (status === 401 || status === 403) {
+    return 'Shovels API authentication failed — the API key may be invalid or expired. Contact Stark.';
+  }
+
+  if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
+    return 'Shovels API request timed out. The service may be temporarily slow — try again in a few minutes.';
+  }
+
+  if (status && status >= 500) {
+    return `Shovels API returned a server error (HTTP ${status}). This is on their end — try again in a few minutes.`;
+  }
+
+  return `Permit search failed: ${err.message || 'Unknown error'}. Contact Stark if this continues.`;
+}
+
 const handlers: Record<string, ToolHandler> = {
   search_permits: async (input, context) => {
     const startDate = input.startDate || new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString().split('T')[0];
@@ -132,6 +167,44 @@ const handlers: Record<string, ToolHandler> = {
     if (!cityName) {
       return { success: false, error: 'city is required for permit search', code: 'VALIDATION' };
     }
+
+    // --- Pre-flight Shovels quota check ---
+    const quota = await shovelsClient.checkQuota();
+
+    if (quota.isOverLimit) {
+      const availMsg = quota.availableAt
+        ? ` Credits will free up on ${quota.availableAt}.`
+        : '';
+      logger.warn(
+        { creditsUsed: quota.creditsUsed, creditLimit: quota.creditLimit },
+        'Permit search blocked — Shovels monthly credit limit exceeded'
+      );
+      return {
+        success: false,
+        error: `Shovels API monthly credit limit reached (${quota.creditsUsed.toLocaleString()} / ${(quota.creditLimit ?? 0).toLocaleString()} credits used).${availMsg} Contact Stark to reset or upgrade the Shovels plan before running more searches.`,
+        code: 'QUOTA_EXCEEDED',
+        quotaStatus: quota,
+      };
+    }
+
+    let quotaWarning: string | undefined;
+    if (quota.creditLimit != null && quota.usagePercent >= 80) {
+      quotaWarning = `⚠️ Shovels API usage is at ${quota.usagePercent}% (${quota.creditsRemaining?.toLocaleString() ?? '?'} credits remaining of ${quota.creditLimit.toLocaleString()}). Consider upgrading the plan soon.`;
+      logger.warn(
+        { usagePercent: quota.usagePercent, remaining: quota.creditsRemaining, limit: quota.creditLimit },
+        'Shovels monthly credit usage above 80% warning threshold'
+      );
+    }
+
+    // Initialize daily credit limit for this run
+    try {
+      const { settingsService } = await import('../../settings/settings.service');
+      const shovelsSettings = await settingsService.getShovelsSettings();
+      shovelsClient.setDailyCreditLimit(shovelsSettings.maxDailyCredits);
+    } catch {
+      shovelsClient.setDailyCreditLimit(5000);
+    }
+    shovelsClient.resetRunCounter();
 
     const dateRangeDays = Math.ceil(
       (new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000
@@ -239,20 +312,17 @@ const handlers: Record<string, ToolHandler> = {
         });
 
         const eventType = result.errors.length > 0 ? WSEventType.JOB_FAILED : WSEventType.JOB_COMPLETED;
-        realtimeEmitter.emitJobEvent({
+        const eventPayload = {
           jobId: search.id,
           jobType: 'permit:search',
           status: result.errors.length > 0 ? 'failed' : 'completed',
+          ...(result.errors.length > 0 && { error: diagnosticMsg }),
           result: { total: 0, message: diagnosticMsg, searchesRun: result.searchesRun },
-        });
+        };
+        realtimeEmitter.emitJobEvent(eventPayload);
 
         if (search.conversationId) {
-          emitJobToConversation(search.conversationId, eventType, {
-            jobId: search.id,
-            jobType: 'permit:search',
-            status: result.errors.length > 0 ? 'failed' : 'completed',
-            result: { total: 0, message: diagnosticMsg, searchesRun: result.searchesRun },
-          });
+          emitJobToConversation(search.conversationId, eventType, eventPayload);
         }
         return;
       }
@@ -305,7 +375,10 @@ const handlers: Record<string, ToolHandler> = {
     }
 
     runSearch().catch(async (err: any) => {
-      logger.error({ err: err.message, searchId: search.id }, 'Permit search pipeline failed');
+      logger.error({ err: err.message, searchId: search.id, status: err.response?.status, code: err.code }, 'Permit search pipeline failed');
+
+      const friendlyError = classifySearchError(err);
+
       await prisma.permitSearch.update({
         where: { id: search.id },
         data: { status: 'FAILED' },
@@ -315,7 +388,7 @@ const handlers: Record<string, ToolHandler> = {
           jobId: search.id,
           jobType: 'permit:search',
           status: 'failed',
-          error: err.message,
+          error: friendlyError,
         });
       }
     });
@@ -327,6 +400,7 @@ const handlers: Record<string, ToolHandler> = {
         status: 'SEARCHING',
         maxResults,
         message: `Permit search for ${input.permitType} permits in ${cityName}${stateAbbr ? ', ' + stateAbbr : ''} has been started (up to ${maxResults} records). Results will arrive via real-time notifications when the search completes.`,
+        ...(quotaWarning && { quotaWarning }),
       },
     };
   },

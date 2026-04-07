@@ -28,6 +28,7 @@ router.get('/conversations/search', chatController.searchConversations.bind(chat
 router.get('/conversations/:id', chatController.getConversation.bind(chatController));
 router.delete('/conversations/:id', chatController.deleteConversation.bind(chatController));
 router.post('/conversations/:id/messages', chatRateLimiter, chatController.sendMessage.bind(chatController));
+router.post('/conversations/:id/workflow-presets/:presetId/run', chatController.runWorkflowPreset.bind(chatController));
 router.post('/conversations/:id/upload', upload.single('file'), chatController.uploadFile.bind(chatController));
 
 // Feedback routes

@@ -150,3 +150,20 @@ export interface ShovelsResident {
   permit_ids: string[] | null;
   [key: string]: any;
 }
+
+export interface ShovelsUsageResponse {
+  credits_used: number;
+  credit_limit: number | null;
+  is_over_limit: boolean;
+  available_at: string | null;
+  daily_usage: { date: string; credits: number; expires: string }[];
+}
+
+export interface ShovelsQuotaStatus {
+  creditsUsed: number;
+  creditLimit: number | null;
+  isOverLimit: boolean;
+  availableAt: string | null;
+  usagePercent: number;
+  creditsRemaining: number | null;
+}
