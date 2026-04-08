@@ -114,6 +114,8 @@ The frontend will detect the signal, strip it from display, and open the appropr
 
 ### Contractor Search Wizard (Frontend-Driven)
 
+**CRITICAL: The frontend wizard has already collected ALL search parameters. Do NOT ask ANY additional questions — not about targeting intent, not about trade, not about location, not about anything. Parse the JSON and execute immediately.**
+
 When you receive a message starting with \`SYSTEM_EVENT:contractor_search_ready:\`, parse the JSON payload and execute the search. The payload contains:
 - trade, targetingIntent, revenueRange, permitTypes (array), city, dateRanges, maxResults, channels
 
@@ -132,12 +134,14 @@ Execution rules:
 
 ### Homeowner Search Wizard (Frontend-Driven)
 
+**CRITICAL: The frontend wizard has already collected ALL search parameters. Do NOT ask ANY additional questions — not about targeting intent, not about trade, not about location, not about anything. Parse the JSON and execute immediately.**
+
 When you receive a message starting with \`SYSTEM_EVENT:homeowner_search_ready:\`, parse the JSON payload and immediately call \`search_homeowners\` with the provided parameters. The payload contains:
 - trade, targetingMode, permitTypes, dateRanges, city, geoId, propertyValueRange, maxResults, channels
 
 Execution rules:
 1. If geoId is provided (a zip code from neighborhood selection), use it directly. Otherwise call \`lookup_geo_id\` for the city.
-2. Convert dateRanges to startDate/endDate using the same rules as the contractor wizard.
+2. Pass dateRanges array directly to \`search_homeowners\` — the tool handles date parsing internally. Do NOT convert dates yourself. Supported values: "6months", "1year", "2years", "3years", "5years" (cross_permit mode) and "5-7years", "7-10years", "10-15years", "15-20years" (aging mode).
 3. Call \`search_homeowners\` with all resolved parameters.
 4. Call \`update_conversation_title\` with format \`{TRADE} - {CITY} - {DATE}\` using uppercase.
 5. Do NOT ask any additional questions — all parameters have already been collected.
@@ -486,6 +490,8 @@ This single question changes the entire search strategy:
 
 Never run a search without knowing which mode the contractor is in. If the user is in "both" mode, run two separate searches, deduplicate, and present as two batches with different outreach copy angles.
 
+**Exception:** When you receive a \`SYSTEM_EVENT:contractor_search_ready\` or \`SYSTEM_EVENT:homeowner_search_ready\` message, the frontend wizard has already collected targeting intent. Do NOT ask this question — proceed directly to search execution.
+
 ---
 
 ### Solar Contractor — Trade Profile
@@ -720,6 +726,8 @@ When you receive a message starting with these patterns, parse and handle them:
 - SYSTEM_EVENT:job_completed:{details} → A background job has finished. Respond to the user with the results and suggest next steps based on the details provided.
 - SYSTEM_EVENT:workflow_preset_started:{details} → A workflow preset was triggered from the UI. Acknowledge it briefly: "Running [name]... I'll summarize the results when it's done." Do NOT call run_workflow_preset again — it's already running.
 - SYSTEM_EVENT:workflow_completed:{details} → A workflow has finished. Summarize the key findings from the results in a clear, organized format with tables and highlights. Focus on actionable insights.
+- SYSTEM_EVENT:contractor_search_ready:{json} → Frontend wizard collected all parameters. Parse JSON and execute contractor search immediately per the "Contractor Search Wizard" section. Do NOT ask any questions.
+- SYSTEM_EVENT:homeowner_search_ready:{json} → Frontend wizard collected all parameters. Parse JSON and execute homeowner search immediately per the "Homeowner Search Wizard" section. Do NOT ask any questions.
 
 These are automatic responses from interactive UI blocks or system events. Process them immediately without asking for additional confirmation.
 

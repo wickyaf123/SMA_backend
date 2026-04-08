@@ -357,6 +357,26 @@ const handlers: Record<string, ToolHandler> = {
         logger.warn({ err: err.message, geoId: resolvedGeoId }, 'Shovels getResidents failed, trying fallback');
       }
 
+      // Post-search date filtering for primary Shovels results.
+      // The residents endpoint does not support date params, so we filter
+      // using any date field present on the raw resident record.
+      if (residents.length > 0 && input.dateRanges?.length > 0) {
+        const beforeCount = residents.length;
+        residents = residents.filter((r: any) => {
+          const permitDate = r.permitDate || r.permit_date || r.issue_date || r.file_date || r.start_date || r.date;
+          if (!permitDate) return true; // Keep residents with no date — can't filter them
+          const d = new Date(permitDate);
+          if (isNaN(d.getTime())) return true; // Keep if date is unparseable
+          return d >= startDate && d <= endDate;
+        });
+        if (beforeCount !== residents.length) {
+          logger.info(
+            { before: beforeCount, after: residents.length, startDate: startDate.toISOString(), endDate: endDate.toISOString() },
+            'Filtered Shovels residents by date range'
+          );
+        }
+      }
+
       // If primary search returned 0, try fallback via homeownerScraperService
       if (residents.length === 0) {
         emitProgress({ phase: 'fallback', message: 'Primary search returned 0 results, trying alternative approach...' });
@@ -364,8 +384,21 @@ const handlers: Record<string, ToolHandler> = {
           const fallbackResult = await homeownerScraperService.scrapeByGeoId(resolvedGeoId, input.city, maxResults);
           // Fallback imports homeowners directly into DB; query them back
           if (fallbackResult.totalImported > 0) {
+            // Build the where clause, adding date range filter when dateRanges are provided.
+            // permitDate is stored as a YYYY-MM-DD string, so lexicographic comparison works.
+            const fallbackWhere: Record<string, any> = {
+              city: { equals: input.city, mode: 'insensitive' },
+            };
+            if (input.dateRanges?.length > 0) {
+              fallbackWhere.permitDate = {
+                not: null,
+                gte: startDate.toISOString().split('T')[0],
+                lte: endDate.toISOString().split('T')[0],
+              };
+            }
+
             const imported = await prisma.homeowner.findMany({
-              where: { city: { equals: input.city, mode: 'insensitive' } },
+              where: fallbackWhere,
               orderBy: { createdAt: 'desc' },
               take: maxResults,
             });
