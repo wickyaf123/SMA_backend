@@ -220,6 +220,7 @@ const handlers: Record<string, ToolHandler> = {
         endDate: new Date(endDate),
         status: 'PENDING',
         conversationId: context?.conversationId || null,
+        userId: context?.userId || null,
       },
     });
 

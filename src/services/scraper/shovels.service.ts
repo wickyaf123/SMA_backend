@@ -349,8 +349,27 @@ export class ShovelsScraperService {
     throw lastErr;
   }
 
+  private permitSearchUserCache = new Map<string, string | null>();
+
+  private async resolvePermitSearchUserId(permitSearchId: string): Promise<string | null> {
+    if (this.permitSearchUserCache.has(permitSearchId)) {
+      return this.permitSearchUserCache.get(permitSearchId)!;
+    }
+    const search = await prisma.permitSearch.findUnique({
+      where: { id: permitSearchId },
+      select: { userId: true },
+    });
+    const userId = search?.userId || null;
+    this.permitSearchUserCache.set(permitSearchId, userId);
+    return userId;
+  }
+
   private async importContact(normalized: any, permitSearchId?: string): Promise<'imported' | 'duplicate' | 'skipped'> {
     if (!normalized.email && !normalized.phone) return 'skipped';
+
+    const ownerUserId = permitSearchId
+      ? await this.resolvePermitSearchUserId(permitSearchId)
+      : null;
 
     try {
       let existing: any = null;
@@ -372,17 +391,21 @@ export class ShovelsScraperService {
         const newPermitTag = normalized.permitType ? `permit:${normalized.permitType}` : null;
         const existingTags: string[] = existing.tags || [];
         const needsTagUpdate = newPermitTag && !existingTags.includes(newPermitTag);
+        const needsUserIdUpdate = ownerUserId && !existing.userId;
 
-        if (needsTagUpdate) {
+        if (needsTagUpdate || needsUserIdUpdate) {
           await prisma.contact.update({
             where: { id: existing.id },
             data: {
-              tags: { push: newPermitTag },
-              permitType: normalized.permitType,
+              ...(needsTagUpdate && {
+                tags: { push: newPermitTag },
+                permitType: normalized.permitType,
+              }),
+              ...(needsUserIdUpdate && { userId: ownerUserId }),
             },
           });
           logger.info(
-            { contactId: existing.id, newPermitTag, permitType: normalized.permitType },
+            { contactId: existing.id, newPermitTag, permitType: normalized.permitType, userId: ownerUserId },
             'Duplicate contact updated with new permit type tag'
           );
         }
@@ -429,7 +452,6 @@ export class ShovelsScraperService {
           permitType: normalized.permitType,
           permitCity: normalized.permitCity,
           licenseNumber: normalized.licenseNumber,
-          // Promoted permit fields
           permitDate: normalized.permitDate,
           permitDateFriendly: normalized.permitDateFriendly,
           permitMonthsAgo: normalized.permitMonthsAgo,
@@ -440,7 +462,6 @@ export class ShovelsScraperService {
           permitJobValue: normalized.permitJobValue,
           permitFees: normalized.permitFees,
           permitJurisdiction: normalized.permitJurisdiction,
-          // Promoted contractor fields
           avgJobValue: normalized.avgJobValue,
           totalJobValue: normalized.totalJobValue,
           permitCount: normalized.permitCount,
@@ -455,6 +476,7 @@ export class ShovelsScraperService {
           enrichmentData: normalized.enrichmentData,
           companyId: company.id,
           permitSearchId: permitSearchId || null,
+          userId: ownerUserId,
           dataSources: ['SHOVELS'],
           tags: [
             ...(normalized.email ? [] : ['no_individual_contact']),

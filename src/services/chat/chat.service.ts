@@ -223,7 +223,7 @@ export class ChatService {
       const totalMessageCount = await prisma.message.count({ where: { conversationId } });
       const conversation = await prisma.conversation.findUnique({
         where: { id: conversationId },
-        select: { summary: true, lastSummarizedAtCount: true },
+        select: { summary: true, lastSummarizedAtCount: true, userId: true },
       });
 
       let conversationSummary = conversation?.summary || null;
@@ -483,7 +483,7 @@ export class ChatService {
             if (onToolUse) onToolUse(toolUse.name, toolUse.input);
 
             try {
-              const result = await executeTool(toolUse.name, toolUse.input as Record<string, any>, { conversationId });
+              const result = await executeTool(toolUse.name, toolUse.input as Record<string, any>, { conversationId, userId: conversation?.userId || undefined });
               if (onToolResult) onToolResult(toolUse.name, result);
               toolResults.push({
                 type: 'tool_result',
