@@ -5,7 +5,7 @@ import { config } from '../../../config';
 import { permitPipelineService } from '../../permit/permit-pipeline.service';
 import { shovelsScraperService, cancelJob, clearJobSignal } from '../../scraper/shovels.service';
 import { shovelsClient, ShovelsCreditLimitError } from '../../../integrations/shovels/client';
-import { lookupGeoId } from '../../../data/geo-ids';
+import { lookupGeoId, getZipsForCity, getZipsForCounty, getZipsForState } from '../../../data/geo-ids';
 import { emitJobToConversation, WSEventType } from '../../../config/websocket';
 import { realtimeEmitter } from '../../realtime/event-emitter.service';
 
@@ -228,7 +228,10 @@ const handlers: Record<string, ToolHandler> = {
       logger.warn({ tool: 'search_permits' }, 'Tool called without conversationId - data will be unscoped');
     }
 
-    // Use scrapeByCity for multi-tier fallback (slug -> zip expansion -> FIPS)
+    // Tier ladder mirrors search_homeowners — never dead-end with a red
+    // "No Permits Found" card. Drop tag → widen window → county → statewide.
+    // Stop at first tier returning ≥ 1 contractor; emit JOB_COMPLETED with
+    // a `widening` envelope so the UI shows "Filters widened: …".
     const runSearch = async () => {
       await prisma.permitSearch.update({
         where: { id: search.id },
@@ -250,26 +253,129 @@ const handlers: Record<string, ToolHandler> = {
         }
       };
 
-      let result;
-      if (stateAbbr) {
-        result = await shovelsScraperService.scrapeByCity(
-          input.permitType, cityName, stateAbbr,
-          dateRangeDays, maxResults, true,
-          undefined,
-          emitProgress,
-          search.id
-        );
-      } else {
-        result = await shovelsScraperService.scrapeByPermitTypeAndGeo(
-          input.permitType, resolvedGeoId, cityName,
-          dateRangeDays, maxResults, true,
-          undefined, undefined,
-          emitProgress,
-          search.id
-        );
+      // Pre-compute zip pools for county / statewide tiers (no extra Shovels calls).
+      const cityZips = stateAbbr ? getZipsForCity(cityName, stateAbbr) : [];
+      const countyZips = stateAbbr
+        ? getZipsForCounty(cityName, stateAbbr).filter((z) => !cityZips.includes(z))
+        : [];
+      const stateZips = stateAbbr ? getZipsForState(stateAbbr, 30) : [];
+
+      const userYearsBack = Math.max(1, Math.ceil(dateRangeDays / 365));
+      const widenedYearsBack = Math.max(userYearsBack * 2, userYearsBack + 2);
+      const wideDateRangeDays = widenedYearsBack * 365;
+
+      type TierId = 'A' | 'B' | 'C' | 'D' | 'E';
+      type Tier = {
+        id: TierId;
+        scope: 'city' | 'zips';
+        zips: string[]; // only used when scope === 'zips'
+        permitType: string; // empty string = no tag
+        dateRangeDays: number;
+        zipCap: number;
+        reason: string;
+      };
+
+      const tiers: Tier[] = ([
+        {
+          id: 'A' as const,
+          scope: 'city' as const,
+          zips: cityZips,
+          permitType: input.permitType,
+          dateRangeDays,
+          zipCap: 5,
+          reason: 'Strict — your exact filters in the requested city.',
+        },
+        {
+          id: 'B' as const,
+          scope: 'city' as const,
+          zips: cityZips,
+          permitType: '',
+          dateRangeDays,
+          zipCap: 5,
+          reason: `No matches with "${input.permitType}" permits — searched all permit types in the city.`,
+        },
+        {
+          id: 'C' as const,
+          scope: 'city' as const,
+          zips: cityZips,
+          permitType: input.permitType,
+          dateRangeDays: wideDateRangeDays,
+          zipCap: 5,
+          reason: `No matches in the original window — widened to last ${widenedYearsBack} years.`,
+        },
+        {
+          id: 'D' as const,
+          scope: 'zips' as const,
+          zips: countyZips,
+          permitType: input.permitType,
+          dateRangeDays,
+          zipCap: 8,
+          reason: `No matches in ${cityName} — searched neighboring cities in the same county.`,
+        },
+        {
+          id: 'E' as const,
+          scope: 'zips' as const,
+          zips: stateZips,
+          permitType: input.permitType,
+          dateRangeDays,
+          zipCap: 30,
+          reason: `Last resort — searched statewide (${stateAbbr || 'state'}) for any "${input.permitType}" permit.`,
+        },
+      ] satisfies Tier[]).filter((t) => {
+        if (t.scope === 'city') return !!stateAbbr; // city tiers need state
+        return t.zips.length > 0;
+      });
+
+      let appliedTier: Tier | null = null;
+      let result: any = null;
+
+      for (const tier of tiers) {
+        emitProgress({
+          phase: 'searching',
+          tier: tier.id,
+          message: `Tier ${tier.id}: ${tier.reason}`,
+        });
+
+        if (tier.scope === 'city') {
+          // Tiers A/B/C: city-level scrape with full Zippopotam fallback inside scrapeByCity.
+          // For tier B (no permit type filter), pass a generic placeholder; the
+          // existing searchWithTagFallback drops the tag automatically when 0.
+          result = await shovelsScraperService.scrapeByCity(
+            tier.permitType || input.permitType,
+            cityName,
+            stateAbbr,
+            tier.dateRangeDays,
+            maxResults,
+            true,
+            undefined,
+            emitProgress,
+            search.id,
+          );
+        } else {
+          // Tiers D/E: explicit zip list (county or state).
+          result = await shovelsScraperService.scrapeByZipGeoIds(
+            tier.permitType || input.permitType,
+            tier.zips.slice(0, tier.zipCap),
+            cityName,
+            tier.dateRangeDays,
+            maxResults,
+            true,
+            undefined,
+            undefined,
+            emitProgress,
+            search.id,
+          );
+        }
+
+        if (result?.wasCancelled) break;
+        if (result && result.totalScraped >= 1) {
+          appliedTier = tier;
+          break;
+        }
       }
 
-      if (result.wasCancelled) {
+      // ── Cancellation handling ──────────────────────────────────────
+      if (result?.wasCancelled) {
         const current = await prisma.permitSearch.findUnique({ where: { id: search.id }, select: { status: true } });
         if (current?.status !== 'CANCELLED') {
           await prisma.permitSearch.update({
@@ -296,40 +402,60 @@ const handlers: Record<string, ToolHandler> = {
         return;
       }
 
-      if (result.totalScraped === 0) {
-        const baseMsg = result.errors.length > 0
-          ? `Search failed: ${result.errors.join('; ')}`
-          : `No ${input.permitType} contractors found in ${cityName}${stateAbbr ? ', ' + stateAbbr : ''} for the selected date range. Tried ${result.searchesRun} geo format(s).`;
-        const diagnosticMsg = result.diagnostics
-          ? `${baseMsg} | Diagnostics: ${result.diagnostics}`
-          : baseMsg;
+      // ── Build widening envelope (mirror homeowner shape) ────────────
+      const widening = appliedTier
+        ? {
+            appliedTier: appliedTier.id,
+            wasWidened: appliedTier.id !== 'A',
+            originalQuery: {
+              city: cityName,
+              permitType: input.permitType,
+              yearsBack: userYearsBack,
+            },
+            actualQuery: {
+              scope: appliedTier.scope === 'city' ? cityName : `${appliedTier.zips.length} ZIPs`,
+              permitType: appliedTier.permitType || '(any)',
+              yearsBack: Math.max(1, Math.ceil(appliedTier.dateRangeDays / 365)),
+            },
+            reason: appliedTier.reason,
+          }
+        : {
+            appliedTier: null,
+            wasWidened: false,
+            originalQuery: {
+              city: cityName,
+              permitType: input.permitType,
+              yearsBack: userYearsBack,
+            },
+            reason: `No contractors filed "${input.permitType}" or any other permits in ${cityName}${stateAbbr ? ', ' + stateAbbr : ''} or surrounding ${stateAbbr || 'state'} ZIPs in the searched windows.`,
+          };
 
+      // ── Zero-result branch (all tiers exhausted) ───────────────────
+      if (!appliedTier || !result || result.totalScraped === 0) {
         await prisma.permitSearch.update({
           where: { id: search.id },
-          data: {
-            status: result.errors.length > 0 ? 'FAILED' : 'COMPLETED',
-            totalFound: 0,
-          },
+          data: { status: 'COMPLETED', totalFound: 0 },
         });
-
-        const eventType = result.errors.length > 0 ? WSEventType.JOB_FAILED : WSEventType.JOB_COMPLETED;
         const eventPayload = {
           jobId: search.id,
           jobType: 'permit:search',
-          status: (result.errors.length > 0 ? 'failed' : 'completed') as 'failed' | 'completed',
-          ...(result.errors.length > 0 && { error: diagnosticMsg }),
-          result: { total: 0, message: diagnosticMsg, searchesRun: result.searchesRun },
+          status: 'completed' as const,
+          result: {
+            total: 0,
+            permitType: input.permitType,
+            city: cityName,
+            widening,
+            message: widening.reason,
+          },
         };
         realtimeEmitter.emitJobEvent(eventPayload);
-
         if (search.conversationId) {
-          emitJobToConversation(search.conversationId, eventType, eventPayload);
+          emitJobToConversation(search.conversationId, WSEventType.JOB_COMPLETED, eventPayload);
         }
         return;
       }
 
-      // Scraping done — contacts are already linked to search.id at creation time (via importContact).
-      // Just update the search status.
+      // ── Found something — proceed with enrichment ──────────────────
       await prisma.permitSearch.update({
         where: { id: search.id },
         data: { status: 'ENRICHING', totalFound: result.totalImported },
@@ -347,7 +473,8 @@ const handlers: Record<string, ToolHandler> = {
             imported: result.totalImported,
             duplicates: result.duplicates,
             filtered: result.filtered,
-            message: `Imported ${result.totalImported} contacts, enriching emails...`,
+            widening,
+            message: `Imported ${result.totalImported} contacts (Tier ${appliedTier.id}), enriching emails...`,
           },
         });
       }

@@ -582,7 +582,9 @@ export class ShovelsScraperService {
 
   private static readonly ZIP_THROTTLE_MS = 150;
 
-  private async scrapeByZipGeoIds(
+  // Made public so tier-widening callers (search_permits) can iterate explicit
+  // zip lists for county/statewide tiers without going through scrapeByCity.
+  async scrapeByZipGeoIds(
     permitType: string,
     zips: string[],
     cityName: string,
