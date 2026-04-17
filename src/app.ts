@@ -15,6 +15,13 @@ import routes from './routes';
 export function createApp(): Express {
   const app = express();
 
+  // Railway terminates TLS at its edge proxy and sets X-Forwarded-For.
+  // Trust exactly one hop so express-rate-limit can extract the real client
+  // IP without over-trusting (which would allow IP spoofing).
+  if (config.isProduction) {
+    app.set('trust proxy', 1);
+  }
+
   // Security middleware
   app.use(helmet());
   

@@ -109,8 +109,19 @@ async function tick(): Promise<void> {
     if (breaches.length === 0) {
       logger.debug('chat-health-sweeper: no breaches');
     }
-  } catch (err) {
-    logger.error({ err }, 'chat-health-sweeper tick failed');
+  } catch (err: any) {
+    // Log individual error fields so Prisma failures (schema drift, missing
+    // tables, connection issues) are readable in Railway logs, not hidden
+    // inside the generic 'Database error' message.
+    logger.error(
+      {
+        err,
+        errMessage: err?.message,
+        errCode: err?.code,
+        errMeta: err?.meta,
+      },
+      'chat-health-sweeper tick failed',
+    );
   }
 }
 
