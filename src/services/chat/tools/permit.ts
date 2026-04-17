@@ -316,7 +316,7 @@ const handlers: Record<string, ToolHandler> = {
         const eventPayload = {
           jobId: search.id,
           jobType: 'permit:search',
-          status: result.errors.length > 0 ? 'failed' : 'completed',
+          status: (result.errors.length > 0 ? 'failed' : 'completed') as 'failed' | 'completed',
           ...(result.errors.length > 0 && { error: diagnosticMsg }),
           result: { total: 0, message: diagnosticMsg, searchesRun: result.searchesRun },
         };
