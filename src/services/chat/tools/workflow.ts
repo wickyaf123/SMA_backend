@@ -226,6 +226,6 @@ const handlers: Record<string, ToolHandler> = {
 
 export function registerTools(registry: ToolRegistry): void {
   for (const def of definitions) {
-    registry.register(def, handlers[def.name]);
+    registry.register({ ...def, domain: 'workflow' }, handlers[def.name]);
   }
 }

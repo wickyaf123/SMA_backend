@@ -391,7 +391,7 @@ const handlers: Record<string, ToolHandler> = {
     };
   },
 
-  trigger_job: async (input) => {
+  trigger_job: async (input, context) => {
     const validJobs = ['shovels', 'homeowner', 'connection', 'enrich', 'merge', 'validate', 'enroll'];
     if (!validJobs.includes(input.jobName)) {
       return {
@@ -407,9 +407,16 @@ const handlers: Record<string, ToolHandler> = {
     }
 
     try {
+      // Stamp conversationId so the run shows up in the chat activity panel.
+      const triggerMetadata: Record<string, any> = {
+        manual: true,
+        triggeredFrom: 'chat',
+      };
+      if (context?.conversationId) triggerMetadata.conversationId = context.conversationId;
+
       const jobResult = await scheduler.triggerJob(
         input.jobName as any,
-        { useQueue: input.useQueue || false }
+        { useQueue: input.useQueue || false, metadata: triggerMetadata }
       );
 
       if (input.useQueue && jobResult.queued) {
@@ -596,6 +603,6 @@ const handlers: Record<string, ToolHandler> = {
 
 export function registerTools(registry: ToolRegistry): void {
   for (const def of definitions) {
-    registry.register(def, handlers[def.name]);
+    registry.register({ ...def, domain: 'system' }, handlers[def.name]);
   }
 }

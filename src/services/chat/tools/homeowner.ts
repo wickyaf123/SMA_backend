@@ -4,11 +4,226 @@ import { realieEnrichmentService } from '../../enrichment/realie.service';
 import { shovelsHomeownerEnrichmentService } from '../../enrichment/shovels-homeowner.service';
 import { connectionService } from '../../connection/connection.service';
 import { shovelsClient } from '../../../integrations/shovels/client';
-import { lookupGeoId } from '../../../data/geo-ids';
+import {
+  lookupGeoId,
+  getShovelsGeoIdsForCity,
+  getZipsForCounty,
+  getZipsForState,
+} from '../../../data/geo-ids';
 import { homeownerScraperService } from '../../scraper/homeowner.service';
 import { emitJobToConversation, WSEventType } from '../../../config/websocket';
 import { realtimeEmitter } from '../../realtime/event-emitter.service';
+import { jobLogService } from '../../job-log.service';
 import { logger } from '../../../utils/logger';
+
+/** Returns a Date that is `years` whole years before `from`. */
+function yearsAgoDate(from: Date, years: number): Date {
+  const d = new Date(from);
+  d.setFullYear(d.getFullYear() - years);
+  return d;
+}
+
+/** Parses "400k-700k" / "under_400k" / "1m+" / "any" into an inclusive {min,max} range. */
+function parsePropertyValueRange(rangeStr: string): { min?: number; max?: number } | null {
+  if (!rangeStr || rangeStr === 'any') return null;
+  const s = rangeStr.toLowerCase().replace(/\s+/g, '');
+  const mPlusMatch = s.match(/^(\d+(?:\.\d+)?)m\+?$/);
+  if (mPlusMatch) return { min: parseFloat(mPlusMatch[1]) * 1_000_000 };
+  const underMatch = s.match(/^under[_-]?(\d+)k$/);
+  if (underMatch) return { max: parseInt(underMatch[1], 10) * 1000 };
+  const rangeMatch = s.match(/^(\d+)k-(\d+)k$/);
+  if (rangeMatch) return { min: parseInt(rangeMatch[1], 10) * 1000, max: parseInt(rangeMatch[2], 10) * 1000 };
+  const kPlusMatch = s.match(/^(\d+)k\+$/);
+  if (kPlusMatch) return { min: parseInt(kPlusMatch[1], 10) * 1000 };
+  return null;
+}
+
+/**
+ * Tag-matching: Shovels' `/permits/search` does NOT accept `tags=` so we
+ * filter client-side. We match permit `type`, `subtype`, `description`,
+ * and `tags[]` loosely — a user-supplied "roofing" matches "Re-roof", and
+ * "ADU" matches "accessory dwelling unit".
+ *
+ * The synonym table is intentionally small and trade-focused; if a
+ * user-supplied token is not in the map we just substring-match it.
+ */
+const TAG_SYNONYMS: Record<string, string[]> = {
+  roofing: ['roof', 're-roof', 'reroof', 'shingle', 'roofing'],
+  solar: ['solar', 'pv', 'photovoltaic'],
+  adu: ['adu', 'accessory dwelling', 'guest house', 'casita'],
+  hvac: ['hvac', 'heat', 'air condition', 'a/c', 'furnace', 'heat pump', 'mechanical'],
+  electrical: ['electric', 'panel upgrade', 'service upgrade'],
+  pool: ['pool', 'spa'],
+  pool_spa: ['pool', 'spa'],
+  ev_charger: ['ev', 'charger', 'charging'],
+  storm: ['storm', 'wind damage', 'hail'],
+  storm_damage: ['storm', 'wind damage', 'hail', 'damage'],
+  generator: ['generator', 'standby power'],
+  hvac_12plus: ['hvac', 'heat', 'air condition', 'mechanical'],
+  roof_replacement: ['roof', 're-roof', 'reroof', 'replace'],
+  home_additions: ['addition', 'remodel', 'alteration', 'expand'],
+  additions: ['addition', 'remodel', 'alteration', 'expand'],
+  new_construction: ['new construction', 'new residential', 'new commercial', 'building permit'],
+};
+
+function expandTagSynonyms(tagsCsv: string): string[] {
+  const tokens = tagsCsv
+    .toLowerCase()
+    .split(',')
+    .map((t) => t.trim().replace(/\s+/g, '_'))
+    .filter(Boolean);
+  const out = new Set<string>();
+  for (const t of tokens) {
+    out.add(t.replace(/_/g, ' '));
+    if (TAG_SYNONYMS[t]) for (const syn of TAG_SYNONYMS[t]) out.add(syn);
+  }
+  return Array.from(out);
+}
+
+function permitMatchesTags(permit: any, tagsCsv: string): boolean {
+  if (!tagsCsv) return true;
+  const wanted = expandTagSynonyms(tagsCsv);
+  if (wanted.length === 0) return true;
+  const haystack = [
+    permit?.type,
+    permit?.subtype,
+    permit?.description,
+    ...(Array.isArray(permit?.tags) ? permit.tags : []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return wanted.some((t) => haystack.includes(t));
+}
+
+/**
+ * Run a single widening tier. The right Shovels pipeline for homeowner
+ * discovery is:
+ *   /permits/search?geo_id=ZIP   → permits (with geo_ids.address_id)
+ *   /addresses/{address_id}/residents → people at that property
+ *
+ * Notes:
+ * - `/addresses/{geoId}/residents` rejects ZIP codes ("Invalid geolocation
+ *   ID type") and rejects FIPS codes ("Invalid geolocation ID value").
+ *   Only Shovels' opaque address-level token works — discovered via curl
+ *   2026-04-17.
+ * - Many addresses have no resident records on file. We surface
+ *   permit-only "lead" rows in that case so the user still gets a
+ *   property-level prospect to enrich elsewhere (Realie, GHL, manual).
+ * - We cap aggressively to control Shovels credit usage: per-tier ZIP
+ *   cap, per-ZIP permit cap, and total-result cap.
+ */
+async function runOneTier(
+  tier: {
+    zips: string[];
+    tags: string;
+    valueRange: string;
+    startDate: Date;
+    endDate: Date;
+    zipCap: number;
+  },
+  maxResults: number
+): Promise<any[]> {
+  const collected: any[] = [];
+  const seenAddress = new Set<string>();
+  const valueRange = parsePropertyValueRange(tier.valueRange);
+  const zipsToTry = tier.zips.slice(0, tier.zipCap);
+
+  // Per-ZIP permit ceiling — each permit costs 1 search credit + up to 1
+  // residents-lookup credit. Keep total <=~100 calls/tier.
+  const permitsPerZip = Math.min(20, Math.max(maxResults * 2, 5));
+
+  const fromDate = tier.startDate.toISOString().split('T')[0];
+  const toDate = tier.endDate.toISOString().split('T')[0];
+
+  for (const zip of zipsToTry) {
+    if (collected.length >= maxResults) break;
+
+    // 1) Get permits in this ZIP for the date window.
+    let permits: any[] = [];
+    try {
+      permits = await shovelsClient.searchPermits(
+        { geo_id: zip, permit_from: fromDate, permit_to: toDate, size: Math.min(permitsPerZip, 50) },
+        permitsPerZip
+      );
+    } catch (err: any) {
+      logger.warn({ err: err.message, zip }, 'Shovels permits/search failed for ZIP — skipping');
+      continue;
+    }
+
+    // 2) Filter permits by tags (client-side — endpoint ignores tags param).
+    const matchingPermits = permits.filter((p) => permitMatchesTags(p, tier.tags));
+
+    // 3) For each matching permit, fetch residents at its address.
+    //    Dedupe addresses so we don't hit the same one twice across permits.
+    for (const permit of matchingPermits) {
+      if (collected.length >= maxResults) break;
+
+      const addressId: string | null = permit?.geo_ids?.address_id || null;
+      if (!addressId) continue;
+      if (seenAddress.has(addressId)) continue;
+      seenAddress.add(addressId);
+
+      let residents: any[] = [];
+      try {
+        residents = await shovelsClient.getResidentsByAddress(addressId);
+      } catch (err: any) {
+        logger.warn(
+          { err: err.message, addressId, permitId: permit?.id },
+          'Residents lookup failed — falling back to permit-only lead'
+        );
+      }
+
+      const propValue = permit?.property_assess_market_value;
+      const passesValueFilter =
+        !valueRange ||
+        (propValue != null &&
+          (!valueRange.min || propValue >= valueRange.min) &&
+          (!valueRange.max || propValue <= valueRange.max));
+
+      if (residents.length > 0) {
+        for (const r of residents) {
+          if (!passesValueFilter) continue;
+          collected.push({
+            ...r,
+            _permitContext: {
+              type: permit?.type,
+              subtype: permit?.subtype,
+              issue_date: permit?.issue_date,
+              file_date: permit?.file_date,
+              tags: permit?.tags,
+              address: permit?.address,
+              property_value: propValue,
+            },
+          });
+          if (collected.length >= maxResults) break;
+        }
+      } else {
+        // No residents on file for this address — surface the permit as a
+        // property-level lead so the user still has something actionable.
+        if (passesValueFilter) {
+          collected.push({
+            id: `permit:${permit?.id}`,
+            isPermitOnlyLead: true,
+            address: permit?.address,
+            property_value: propValue,
+            permit: {
+              id: permit?.id,
+              number: permit?.number,
+              type: permit?.type,
+              subtype: permit?.subtype,
+              issue_date: permit?.issue_date,
+              file_date: permit?.file_date,
+              tags: permit?.tags,
+            },
+          });
+        }
+      }
+    }
+  }
+
+  return collected;
+}
 
 const definitions: ToolDefinition[] = [
   {
@@ -221,114 +436,96 @@ const handlers: Record<string, ToolHandler> = {
   },
 
   search_homeowners: async (input, context) => {
-    // Resolve geoId from city if not provided
-    let resolvedGeoId = input.geoId || '';
-    if (!resolvedGeoId) {
-      const geoResult = lookupGeoId(input.city);
-      if (geoResult && !Array.isArray(geoResult)) {
-        resolvedGeoId = geoResult.geoId;
-      } else if (Array.isArray(geoResult) && geoResult.length > 0) {
-        resolvedGeoId = geoResult[0].geoId;
+    // ── 1. Resolve city → list of valid Shovels geo_ids ─────────────
+    // CRITICAL: Shovels does NOT accept FIPS county codes (e.g. "04013").
+    // We use the city's ZIPs from our local dictionary; if the city isn't
+    // there we fall back to Shovels' own `/addresses/search?q=...` resolver.
+    let cityGeoIds: string[] = [];
+    if (input.geoId) {
+      cityGeoIds = [String(input.geoId)];
+    } else if (input.city) {
+      cityGeoIds = getShovelsGeoIdsForCity(input.city);
+      if (cityGeoIds.length === 0) {
+        const addrs = await shovelsClient.searchAddresses(input.city, 1).catch(() => []);
+        if (addrs[0]?.geo_id) cityGeoIds = [addrs[0].geo_id];
       }
     }
-
-    if (!resolvedGeoId) {
+    if (cityGeoIds.length === 0) {
       return {
         success: false,
-        error: `Could not resolve a GeoID for "${input.city}". Please provide a geoId or zip code directly.`,
+        error: `Could not resolve any Shovels geo IDs for "${input.city}". Provide a geoId or 5-digit ZIP directly.`,
         code: 'VALIDATION' as ToolErrorCode,
       };
     }
 
-    // Parse date ranges from input
+    // For widening: derive county and statewide ZIP pools (no extra Shovels calls).
+    const countyGeoIds: string[] = input.city
+      ? getZipsForCounty(input.city).filter((z) => !cityGeoIds.includes(z))
+      : [];
+    const cityLookup = input.city ? lookupGeoId(input.city) : null;
+    const stateAbbr =
+      cityLookup && !Array.isArray(cityLookup)
+        ? cityLookup.stateAbbr
+        : Array.isArray(cityLookup)
+          ? cityLookup[0]?.stateAbbr || ''
+          : '';
+    const stateGeoIds = stateAbbr ? getZipsForState(stateAbbr, 30) : [];
+
+    // ── 2. Parse user date window ───────────────────────────────────
     const now = new Date();
-    let startDate = new Date(now);
-    let endDate = new Date(now);
-    startDate.setFullYear(startDate.getFullYear() - 1); // default: 1 year back
-
+    let userMaxYearsBack = 1;
+    let userMinYearsBack = 0;
     if (input.dateRanges && input.dateRanges.length > 0) {
-      // Find the widest range from the provided dateRanges
-      let maxYearsBack = 1;
-      let minYearsBack = 0;
-
       for (const range of input.dateRanges) {
         const rangeStr = (range as string).toLowerCase().replace(/\s+/g, '');
-        // Parse "5-7years" -> 5 to 7 years back
         const rangeMatch = rangeStr.match(/^(\d+)-(\d+)year/);
         if (rangeMatch) {
           const lo = parseInt(rangeMatch[1], 10);
           const hi = parseInt(rangeMatch[2], 10);
-          if (hi > maxYearsBack) maxYearsBack = hi;
-          if (lo > minYearsBack) minYearsBack = lo;
+          if (hi > userMaxYearsBack) userMaxYearsBack = hi;
+          if (lo > userMinYearsBack) userMinYearsBack = lo;
           continue;
         }
-        // Parse "1year", "2years" -> N years back
         const singleMatch = rangeStr.match(/^(\d+)year/);
         if (singleMatch) {
           const n = parseInt(singleMatch[1], 10);
-          if (n > maxYearsBack) maxYearsBack = n;
-          continue;
+          if (n > userMaxYearsBack) userMaxYearsBack = n;
         }
       }
-
-      startDate = new Date(now);
-      startDate.setFullYear(startDate.getFullYear() - maxYearsBack);
-      if (minYearsBack > 0) {
-        endDate = new Date(now);
-        endDate.setFullYear(endDate.getFullYear() - minYearsBack);
-      }
     }
+    const userTags = input.permitTypes.join(',');
+    const userValueRange = input.propertyValueRange || 'any';
 
-    const tags = input.permitTypes.join(',');
-
-    // Create a permitSearch record for tracking
+    // ── 3. Create permit-search row + ImportJob row ─────────────────
     const search = await prisma.permitSearch.create({
       data: {
-        permitType: input.permitTypes.join(','),
+        permitType: userTags,
         city: input.city,
-        geoId: resolvedGeoId,
-        startDate: new Date(startDate),
-        endDate: new Date(endDate),
+        geoId: cityGeoIds[0],
+        startDate: yearsAgoDate(now, userMaxYearsBack),
+        endDate: userMinYearsBack > 0 ? yearsAgoDate(now, userMinYearsBack) : new Date(now),
         status: 'PENDING',
         conversationId: context?.conversationId || null,
       },
     });
 
-    // Cross-trade signal mapping
-    const CROSS_TRADE_MAP: Record<string, string[]> = {
-      pool: ['solar', 'electrical'],
-      ev_charger: ['solar', 'electrical'],
-      adu: ['solar', 'hvac', 'electrical', 'roofing'],
-      new_construction: ['solar', 'hvac', 'electrical', 'roofing', 'pool_spa', 'general_contractor'],
-      roof_replacement: ['solar'],
-      hvac_12plus: ['solar'],
-      generator: ['electrical', 'solar'],
-    };
-
-    // Property value range parser
-    const parsePropertyValueRange = (rangeStr: string): { min?: number; max?: number } | null => {
-      if (!rangeStr || rangeStr === 'any') return null;
-      const s = rangeStr.toLowerCase().replace(/\s+/g, '');
-      // "1m+" or "1m"
-      const mPlusMatch = s.match(/^(\d+(?:\.\d+)?)m\+?$/);
-      if (mPlusMatch) return { min: parseFloat(mPlusMatch[1]) * 1_000_000 };
-      // "under_400k"
-      const underMatch = s.match(/^under[_-]?(\d+)k$/);
-      if (underMatch) return { max: parseInt(underMatch[1], 10) * 1000 };
-      // "400k-700k"
-      const rangeMatch = s.match(/^(\d+)k-(\d+)k$/);
-      if (rangeMatch) return { min: parseInt(rangeMatch[1], 10) * 1000, max: parseInt(rangeMatch[2], 10) * 1000 };
-      // "400k+"
-      const kPlusMatch = s.match(/^(\d+)k\+$/);
-      if (kPlusMatch) return { min: parseInt(kPlusMatch[1], 10) * 1000 };
-      return null;
-    };
-
-    const runSearch = async () => {
-      await prisma.permitSearch.update({
-        where: { id: search.id },
-        data: { status: 'SEARCHING' },
+    let importJobId: string | null = null;
+    try {
+      importJobId = await jobLogService.startJob('HOMEOWNER_SCRAPE', {
+        city: input.city,
+        permitTypes: input.permitTypes,
+        permitSearchId: search.id,
+        conversationId: context?.conversationId,
+        manual: true,
+        triggeredFrom: 'chat',
       });
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'Failed to create ImportJob row for homeowner search — continuing');
+    }
+
+    // ── 4. Background search (fire-and-forget) ──────────────────────
+    const runSearch = async () => {
+      await prisma.permitSearch.update({ where: { id: search.id }, data: { status: 'SEARCHING' } });
 
       const emitProgress = (event: any) => {
         if (search.conversationId) {
@@ -343,82 +540,155 @@ const handlers: Record<string, ToolHandler> = {
 
       const maxResults = Math.min(input.maxResults || 250, 1000);
 
-      emitProgress({ phase: 'searching', message: `Searching for homeowners in ${input.city}...` });
+      // Build tier ladder. Each tier yields a "candidate" search definition.
+      // Stop at first tier returning ≥ 1 hit.
+      type Tier = {
+        id: 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
+        zips: string[];
+        tags: string;
+        valueRange: string;
+        startDate: Date;
+        endDate: Date;
+        zipCap: number;
+        reason: string;
+      };
 
+      // Tier ladder: peel off filters in order of "least likely to be present"
+      // in Shovels data. Property values are null for ~95% of permits in our
+      // sampling, so we drop value before tags. Tags are loosely matched
+      // (synonym-expanded), so we drop them only after value.
+      const tiers: Tier[] = [
+        {
+          id: 'A' as const,
+          zips: cityGeoIds,
+          tags: userTags,
+          valueRange: userValueRange,
+          startDate: yearsAgoDate(now, userMaxYearsBack),
+          endDate: userMinYearsBack > 0 ? yearsAgoDate(now, userMinYearsBack) : new Date(now),
+          zipCap: 5,
+          reason: 'Strict — your exact filters in the requested city.',
+        },
+        {
+          id: 'B' as const,
+          zips: cityGeoIds,
+          tags: userTags,
+          valueRange: 'any',
+          startDate: yearsAgoDate(now, userMaxYearsBack),
+          endDate: new Date(now),
+          zipCap: 5,
+          reason:
+            userValueRange && userValueRange !== 'any'
+              ? `No matches at property-value range ${userValueRange} (Shovels rarely populates property values) — dropped value filter.`
+              : 'Widened the date window to current.',
+        },
+        {
+          id: 'C' as const,
+          zips: cityGeoIds,
+          tags: '',
+          valueRange: 'any',
+          startDate: yearsAgoDate(now, userMaxYearsBack),
+          endDate: new Date(now),
+          zipCap: 5,
+          reason: 'No matches with your permit-type filter — searched the city for any permit type.',
+        },
+        {
+          id: 'D' as const,
+          zips: cityGeoIds,
+          tags: '',
+          valueRange: 'any',
+          startDate: yearsAgoDate(now, Math.max(userMaxYearsBack * 2, userMaxYearsBack + 2)),
+          endDate: new Date(now),
+          zipCap: 5,
+          reason: `No matches in the ${userMaxYearsBack}-year window — widened to ${Math.max(userMaxYearsBack * 2, userMaxYearsBack + 2)} years.`,
+        },
+        {
+          id: 'E' as const,
+          zips: countyGeoIds,
+          tags: userTags,
+          valueRange: 'any',
+          startDate: yearsAgoDate(now, userMaxYearsBack),
+          endDate: new Date(now),
+          zipCap: 8,
+          reason: 'No matches in the requested city — searched neighboring cities in the same county for your permit types.',
+        },
+        {
+          id: 'F' as const,
+          zips: stateGeoIds,
+          tags: '',
+          valueRange: 'any',
+          startDate: yearsAgoDate(now, userMaxYearsBack),
+          endDate: new Date(now),
+          zipCap: 10,
+          reason: `Last resort — searched statewide (${stateAbbr || 'state'}) for any recent permit.`,
+        },
+      ].filter((t) => t.zips.length > 0);
+
+      let appliedTier: Tier | null = null;
       let residents: any[] = [];
-      try {
-        const result = await shovelsClient.getResidents(resolvedGeoId, {
-          tags,
-          size: 50,
-          maxResults,
-        });
-        residents = result.residents;
-      } catch (err: any) {
-        logger.warn({ err: err.message, geoId: resolvedGeoId }, 'Shovels getResidents failed, trying fallback');
-      }
 
-      // Post-search date filtering for primary Shovels results.
-      // The residents endpoint does not support date params, so we filter
-      // using any date field present on the raw resident record.
-      if (residents.length > 0 && input.dateRanges?.length > 0) {
-        const beforeCount = residents.length;
-        residents = residents.filter((r: any) => {
-          const permitDate = r.permitDate || r.permit_date || r.issue_date || r.file_date || r.start_date || r.date;
-          if (!permitDate) return true; // Keep residents with no date — can't filter them
-          const d = new Date(permitDate);
-          if (isNaN(d.getTime())) return true; // Keep if date is unparseable
-          return d >= startDate && d <= endDate;
+      for (const tier of tiers) {
+        emitProgress({
+          phase: 'searching',
+          message: `Tier ${tier.id} (${tier.zips.length} ZIP${tier.zips.length === 1 ? '' : 's'}): ${tier.reason}`,
+          tier: tier.id,
         });
-        if (beforeCount !== residents.length) {
-          logger.info(
-            { before: beforeCount, after: residents.length, startDate: startDate.toISOString(), endDate: endDate.toISOString() },
-            'Filtered Shovels residents by date range'
-          );
+        residents = await runOneTier(tier, maxResults);
+        if (residents.length >= 1) {
+          appliedTier = tier;
+          break;
         }
       }
 
-      // If primary search returned 0, try fallback via homeownerScraperService
+      // ── 5. DB-fallback if every Shovels tier missed ───────────────
+      // Last-ditch: invoke the existing scraper which writes Homeowner rows
+      // directly and we query them back. Same code path the old impl used.
       if (residents.length === 0) {
-        emitProgress({ phase: 'fallback', message: 'Primary search returned 0 results, trying alternative approach...' });
+        emitProgress({
+          phase: 'fallback',
+          message: 'No matches in any Shovels tier — falling back to local scraper (Realie / DB).',
+        });
         try {
-          const fallbackResult = await homeownerScraperService.scrapeByGeoId(resolvedGeoId, input.city, maxResults);
-          // Fallback imports homeowners directly into DB; query them back
+          const fallbackResult = await homeownerScraperService.scrapeByGeoId(
+            cityGeoIds[0],
+            input.city,
+            maxResults
+          );
           if (fallbackResult.totalImported > 0) {
-            // Build the where clause, adding date range filter when dateRanges are provided.
-            // permitDate is stored as a YYYY-MM-DD string, so lexicographic comparison works.
-            const fallbackWhere: Record<string, any> = {
-              city: { equals: input.city, mode: 'insensitive' },
-            };
-            if (input.dateRanges?.length > 0) {
-              fallbackWhere.permitDate = {
-                not: null,
-                gte: startDate.toISOString().split('T')[0],
-                lte: endDate.toISOString().split('T')[0],
-              };
-            }
-
-            const imported = await prisma.homeowner.findMany({
-              where: fallbackWhere,
+            residents = await prisma.homeowner.findMany({
+              where: { city: { equals: input.city, mode: 'insensitive' } },
               orderBy: { createdAt: 'desc' },
               take: maxResults,
             });
-            residents = imported;
+            appliedTier = {
+              id: 'F' as const,
+              zips: cityGeoIds,
+              tags: userTags,
+              valueRange: 'any',
+              startDate: yearsAgoDate(now, userMaxYearsBack),
+              endDate: new Date(now),
+              zipCap: 5,
+              reason: 'Shovels returned no matches — surfaced homeowners imported by our local scraper.',
+            };
           }
         } catch (fallbackErr: any) {
-          logger.error({ err: fallbackErr.message, geoId: resolvedGeoId }, 'Homeowner scraper fallback failed');
+          logger.error({ err: fallbackErr.message }, 'Homeowner DB-fallback failed');
         }
       }
 
-      emitProgress({
-        phase: 'processing',
-        message: `Found ${residents.length} homeowners, processing signals...`,
-      });
-
-      // Count cross-trade signals from the results
+      // ── 6. Cross-trade signal counting + final result ─────────────
+      const CROSS_TRADE_MAP: Record<string, string[]> = {
+        pool: ['solar', 'electrical'],
+        ev_charger: ['solar', 'electrical'],
+        adu: ['solar', 'hvac', 'electrical', 'roofing'],
+        new_construction: ['solar', 'hvac', 'electrical', 'roofing', 'pool_spa', 'general_contractor'],
+        roof_replacement: ['solar'],
+        hvac_12plus: ['solar'],
+        generator: ['electrical', 'solar'],
+      };
       const crossTradeSignals: Record<string, number> = {};
       for (const resident of residents) {
         const permitTypes: string[] = resident.permitType
-          ? resident.permitType.split(',').map((t: string) => t.trim().toLowerCase())
+          ? String(resident.permitType).split(',').map((t: string) => t.trim().toLowerCase())
           : [];
         for (const pt of permitTypes) {
           const interestedTrades = CROSS_TRADE_MAP[pt];
@@ -430,57 +700,113 @@ const handlers: Record<string, ToolHandler> = {
         }
       }
 
-      // Property value filtering (post-search)
-      let filtered = residents;
-      const valueRange = parsePropertyValueRange(input.propertyValueRange);
-      if (valueRange) {
-        filtered = residents.filter((r: any) => {
-          const value = r.avmValue || r.assessedValue || r.propertyValue;
-          if (value == null) return false;
-          if (valueRange.min && value < valueRange.min) return false;
-          if (valueRange.max && value > valueRange.max) return false;
-          return true;
-        });
-      }
+      const widening = appliedTier
+        ? {
+            appliedTier: appliedTier.id,
+            wasWidened: appliedTier.id !== 'A',
+            originalQuery: {
+              city: input.city,
+              permitTypes: input.permitTypes,
+              propertyValueRange: userValueRange,
+              yearsBack: userMaxYearsBack,
+            },
+            actualQuery: {
+              cityZipsTried: appliedTier.zips.slice(0, appliedTier.zipCap),
+              tags: appliedTier.tags || '(any)',
+              propertyValueRange: appliedTier.valueRange,
+              yearsBack: Math.round(
+                (appliedTier.endDate.getTime() - appliedTier.startDate.getTime()) /
+                  (365 * 24 * 60 * 60 * 1000)
+              ),
+            },
+            reason: appliedTier.reason,
+          }
+        : {
+            appliedTier: null,
+            wasWidened: false,
+            originalQuery: {
+              city: input.city,
+              permitTypes: input.permitTypes,
+              propertyValueRange: userValueRange,
+              yearsBack: userMaxYearsBack,
+            },
+            reason: 'No homeowners found in any tier (city → no-tag → any-value → wider window → county → statewide → DB).',
+          };
 
-      // Update search record
       await prisma.permitSearch.update({
         where: { id: search.id },
-        data: { status: 'COMPLETED', totalFound: filtered.length },
+        data: { status: 'COMPLETED', totalFound: residents.length },
       });
 
-      // Emit completion
+      if (importJobId) {
+        await jobLogService
+          .completeJob(importJobId, {
+            totalRecords: residents.length,
+            successCount: residents.length,
+            errorCount: 0,
+            metadata: { widening },
+          })
+          .catch((e) => logger.warn({ err: e.message }, 'completeJob failed'));
+      }
+
+      // Build a sample of leads for the in-chat table (first 10).
+      // Includes both real residents and permit-only "leads needing enrichment".
+      const sampleHomeowners = residents.slice(0, 10).map((r: any) => {
+        const addr = r.address || r._permitContext?.address || null;
+        const street = addr
+          ? [addr.street_no, addr.street].filter(Boolean).join(' ') || addr.street || ''
+          : [r.street_no, r.street].filter(Boolean).join(' ') || r.street || '';
+        const permit = r.permit || r._permitContext || null;
+        return {
+          id: r.id || null,
+          name: r.fullName || r.full_name || [r.first_name, r.last_name].filter(Boolean).join(' ') || (r.isPermitOnlyLead ? '— (no resident on file)' : ''),
+          email: r.email || null,
+          phone: r.phone || null,
+          street: street || null,
+          city: r.city || addr?.city || null,
+          state: r.state || addr?.state || null,
+          zipCode: r.zip_code || r.zipCode || addr?.zip_code || null,
+          permitType: permit?.type || permit?.subtype || null,
+          permitDate: permit?.issue_date || permit?.file_date || null,
+          propertyValue: r.property_value || r._permitContext?.property_value || r.avmValue || r.assessedValue || null,
+          isPermitOnlyLead: !!r.isPermitOnlyLead,
+        };
+      });
+
+      const completedPayload = {
+        total: residents.length,
+        withEmail: residents.filter((r: any) => r.email).length,
+        withPhone: residents.filter((r: any) => r.phone).length,
+        permitOnlyCount: residents.filter((r: any) => r.isPermitOnlyLead).length,
+        crossTradeSignals,
+        trade: input.trade,
+        city: input.city,
+        widening,
+        homeowners: sampleHomeowners,
+      };
+
       if (search.conversationId) {
         emitJobToConversation(search.conversationId, WSEventType.JOB_COMPLETED, {
           jobId: search.id,
           jobType: 'homeowner:search',
           status: 'completed',
-          result: {
-            total: filtered.length,
-            withEmail: filtered.filter((r: any) => r.email).length,
-            withPhone: filtered.filter((r: any) => r.phone).length,
-            crossTradeSignals,
-            trade: input.trade,
-            city: input.city,
-          },
+          result: completedPayload,
         });
       }
-
       realtimeEmitter.emitJobEvent({
         jobId: search.id,
         jobType: 'homeowner:search',
         status: 'completed',
-        result: { total: filtered.length, trade: input.trade, city: input.city },
+        result: completedPayload,
       });
     };
 
-    // Emit started events
+    // Started events
     realtimeEmitter.emitJobEvent({
       jobId: search.id,
       jobType: 'homeowner:search',
       status: 'started',
     });
-
     if (context?.conversationId) {
       emitJobToConversation(context.conversationId, WSEventType.JOB_STARTED, {
         jobId: search.id,
@@ -490,13 +816,17 @@ const handlers: Record<string, ToolHandler> = {
       });
     }
 
-    // Fire and forget
+    // Fire-and-forget
     runSearch().catch(async (err) => {
       logger.error({ err: err.message, searchId: search.id }, 'Homeowner search failed');
-      await prisma.permitSearch.update({
-        where: { id: search.id },
-        data: { status: 'FAILED' },
-      }).catch(() => {});
+      await prisma.permitSearch
+        .update({ where: { id: search.id }, data: { status: 'FAILED' } })
+        .catch(() => {});
+      if (importJobId) {
+        await jobLogService
+          .failJob(importJobId, err.message, { permitSearchId: search.id })
+          .catch(() => {});
+      }
       if (context?.conversationId) {
         emitJobToConversation(context.conversationId, WSEventType.JOB_FAILED, {
           jobId: search.id,
@@ -512,7 +842,12 @@ const handlers: Record<string, ToolHandler> = {
       data: {
         searchId: search.id,
         status: 'SEARCHING',
-        message: `Homeowner search for ${input.trade} trade in ${input.city} has been started (permit types: ${input.permitTypes.join(', ')}). Results will arrive via real-time notifications.`,
+        message:
+          `Homeowner search for ${input.trade} in ${input.city} has started ` +
+          `(permit types: ${input.permitTypes.join(', ')}). ` +
+          `If your exact filters return nothing, the search will widen step-by-step ` +
+          `(drop tag → any value → longer window → neighboring cities → statewide) and ` +
+          `report which tier was used in the result. Results arrive via real-time notification.`,
       },
     };
   },
@@ -620,6 +955,6 @@ const handlers: Record<string, ToolHandler> = {
 
 export function registerTools(registry: ToolRegistry): void {
   for (const def of definitions) {
-    registry.register(def, handlers[def.name]);
+    registry.register({ ...def, domain: 'permit' }, handlers[def.name]);
   }
 }

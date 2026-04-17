@@ -4,9 +4,15 @@
  * Source: US Census Bureau, USPS
  *
  * Used by: lookup_geo_id tool, search_permits tool, scrapeByCity fallback
+ *
+ * IMPORTANT: `geoId` here is a FIPS county code (e.g. "04013" = Maricopa County, AZ).
+ * Shovels does NOT accept FIPS codes — its `geo_id` parameter accepts ZIP codes
+ * or its own opaque tokens (resolved via `/v2/addresses/search`).
+ * Use `getShovelsGeoIdsForCity()` (the city's ZIPs) when calling Shovels endpoints.
  */
 
 export interface GeoIdEntry {
+  /** FIPS county code. NOT a Shovels geo_id — see file header. */
   geoId: string;
   county: string;
   state: string;
@@ -592,4 +598,55 @@ export function getZipsForCity(city: string, state?: string): string[] {
   if (!result) return [];
   if (Array.isArray(result)) return result[0]?.zips || [];
   return result.zips || [];
+}
+
+/**
+ * Return Shovels-compatible geo_id values for a city (its ZIP codes).
+ * Shovels accepts 5-digit ZIPs as `geo_id` on contractors/search and
+ * /addresses/{geoId}/residents — confirmed via curl 2026-04-17.
+ *
+ * For cities not in our local dictionary, callers should fall back to
+ * `shovelsClient.searchAddresses(q)` to obtain Shovels' opaque geo_id token.
+ */
+export function getShovelsGeoIdsForCity(city: string, state?: string): string[] {
+  return getZipsForCity(city, state);
+}
+
+/**
+ * Return all ZIPs across every city in the same county as the given city.
+ * Used for Tier E "neighboring cities" widening when the requested city has
+ * no matches.
+ */
+export function getZipsForCounty(city: string, state?: string): string[] {
+  const result = lookupGeoId(city, state);
+  if (!result) return [];
+  const seed = Array.isArray(result) ? result[0] : result;
+  if (!seed) return [];
+
+  const zips = new Set<string>(seed.zips || []);
+  for (const entry of GEO_ID_MAP.values()) {
+    if (entry.geoId === seed.geoId && entry.stateAbbr === seed.stateAbbr) {
+      for (const z of entry.zips || []) zips.add(z);
+    }
+  }
+  return Array.from(zips);
+}
+
+/**
+ * Return ZIPs for every city in the given state in our dictionary.
+ * Used for Tier F statewide last-resort widening. Capped to avoid
+ * runaway Shovels credit consumption.
+ */
+export function getZipsForState(stateAbbr: string, cap: number = 50): string[] {
+  const upper = stateAbbr.toUpperCase();
+  const zips: string[] = [];
+  for (const entry of GEO_ID_MAP.values()) {
+    if (entry.stateAbbr === upper) {
+      for (const z of entry.zips || []) {
+        zips.push(z);
+        if (zips.length >= cap) return zips;
+      }
+    }
+  }
+  return zips;
 }

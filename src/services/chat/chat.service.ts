@@ -3,30 +3,15 @@ import { prisma } from '../../config/database';
 import { config } from '../../config/index';
 import { logger } from '../../utils/logger';
 import { NotFoundError, RateLimitError } from '../../utils/errors';
-import { retryWithBackoff } from '../../utils/retry';
-import { toolDefinitions, executeTool } from './tools/index';
-import { getJerrySystemPrompt } from './system-prompt';
+import { runLangGraphTurn, resumeLangGraphConfirmation } from './agent/engine';
 
-const MAX_HISTORY_MESSAGES = 50;
-const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOOL_ITERATIONS = 10;
-
-const CONFIRMATION_REQUIRED_TOOLS = new Set([
-  'delete_contact', 'delete_homeowner',
-  'delete_template', 'delete_routing_rule', 'emergency_stop',
-  'mark_as_customer', 'enroll_contacts', 'send_sms',
-]);
-
-/**
- * Ensure jerry:confirm / jerry:form / jerry:buttons blocks are wrapped in
- * triple-backtick code fences. Claude sometimes omits the fences after a
- * tool-use round, which causes the frontend to render raw JSON.
- */
-function ensureJerryBlocksFenced(content: string): string {
-  return content.replace(
-    /(?:^|\n)\s*jerry:(confirm|form|buttons)\s*\n(\s*\{[\s\S]*?\n\s*\})/gm,
-    '\n```jerry:$1\n$2\n```',
-  );
+/** Classify protocol prefixes so the Prisma message row has accurate metadata. */
+function inferProtocolMetadata(userMessage: string): any {
+  if (userMessage.startsWith('BUTTON:')) return { type: 'protocol_button', raw: userMessage };
+  if (userMessage.startsWith('CONFIRM:')) return { type: 'protocol_confirm', raw: userMessage };
+  if (userMessage.startsWith('FORM:')) return { type: 'protocol_form', raw: userMessage };
+  if (userMessage.startsWith('SYSTEM_EVENT:')) return { type: 'protocol_system_event', raw: userMessage };
+  return { type: 'user' };
 }
 
 export class ChatService {
@@ -181,27 +166,17 @@ export class ChatService {
     conversationId: string,
     userMessage: string,
     onToken?: (token: string) => void,
-    onToolUse?: (toolName: string, toolInput: any) => void,
-    onToolResult?: (toolName: string, result: any) => void,
+    onToolUse?: (toolName: string, toolInput: any, toolCallId?: string) => void,
+    onToolResult?: (toolName: string, result: any, toolCallId?: string) => void,
     onDone?: (fullResponse: string) => void,
     onError?: (error: string) => void,
   ): Promise<any> {
-    let fullResponse = '';
-    let streamedText = '';
+    const abortController = new AbortController();
+    this.activeStreams.set(conversationId, abortController);
 
     try {
-      // 1. Save user message to DB (TASK 4: detect protocol messages)
-      let messageMetadata: any = { type: 'user' };
-      if (userMessage.startsWith('BUTTON:')) {
-        messageMetadata = { type: 'protocol_button', raw: userMessage };
-      } else if (userMessage.startsWith('CONFIRM:')) {
-        messageMetadata = { type: 'protocol_confirm', raw: userMessage };
-      } else if (userMessage.startsWith('FORM:')) {
-        messageMetadata = { type: 'protocol_form', raw: userMessage };
-      } else if (userMessage.startsWith('SYSTEM_EVENT:')) {
-        messageMetadata = { type: 'protocol_system_event', raw: userMessage };
-      }
-
+      // Persist user message for UI history
+      const messageMetadata = inferProtocolMetadata(userMessage);
       await prisma.message.create({
         data: {
           conversationId,
@@ -211,437 +186,89 @@ export class ChatService {
         },
       });
 
-      // 2. Load conversation history (newest N messages, then reverse to chronological order)
-      const historyDesc = await prisma.message.findMany({
-        where: { conversationId },
-        orderBy: { createdAt: 'desc' },
-        take: MAX_HISTORY_MESSAGES,
-      });
-      const history = historyDesc.reverse();
-
-      // TASK 6: Check if we need to summarize old messages
-      const totalMessageCount = await prisma.message.count({ where: { conversationId } });
       const conversation = await prisma.conversation.findUnique({
         where: { id: conversationId },
-        select: { summary: true, lastSummarizedAtCount: true, userId: true },
+        select: { userId: true },
       });
 
-      let conversationSummary = conversation?.summary || null;
-
-      if (totalMessageCount > 40 && (!conversation?.lastSummarizedAtCount || totalMessageCount - conversation.lastSummarizedAtCount >= 20)) {
-        // Summarize the oldest messages that are being dropped
-        try {
-          const oldestMessages = historyDesc.slice(Math.max(0, historyDesc.length - 20)); // last 20 of desc = oldest 20 in current window
-          const messagesForSummary = oldestMessages
-            .filter(m => m.role === 'user' || m.role === 'assistant')
-            .map(m => `${m.role}: ${m.content?.substring(0, 200)}`)
-            .join('\n');
-
-          if (messagesForSummary.length > 0) {
-            const summaryResponse = await this.getClient().messages.create({
-              model: 'claude-haiku-4-5-20251001',
-              max_tokens: 300,
-              messages: [{
-                role: 'user',
-                content: `Summarize this conversation context in ~100 words. Focus on key topics, decisions, and any pending actions:\n\n${messagesForSummary}`,
-              }],
-            });
-            conversationSummary = (summaryResponse.content[0] as any)?.text?.trim() || null;
-
-            if (conversationSummary) {
-              await prisma.conversation.update({
-                where: { id: conversationId },
-                data: {
-                  summary: conversationSummary,
-                  lastSummarizedAtCount: totalMessageCount,
-                },
-              });
-            }
-          }
-        } catch (summaryError) {
-          logger.warn({ error: summaryError, conversationId }, 'Failed to generate conversation summary');
-        }
-      }
-
-      // 3. Build Claude messages from history
-      const claudeMessages: Anthropic.MessageParam[] = [];
-
-      // TASK 6: Inject conversation summary if available
-      if (conversationSummary) {
-        claudeMessages.push({
-          role: 'user',
-          content: `[Previous conversation context: ${conversationSummary}]`,
-        });
-        claudeMessages.push({
-          role: 'assistant',
-          content: 'I understand the previous context. How can I help you continue?',
-        });
-      }
-
-      // TASK 4: Condense protocol messages when building Claude context
-      for (const msg of history) {
-        if (msg.role === 'user') {
-          // Condense protocol messages for Claude context
-          let content = msg.content;
-          const meta = msg.metadata as any;
-          if (meta?.type === 'protocol_button') {
-            const parts = msg.content.split(':');
-            content = `User selected: ${parts.slice(2).join(':')} for ${parts[1] || 'option'}`;
-          } else if (meta?.type === 'protocol_confirm') {
-            const parts = msg.content.split(':');
-            content = `User confirmed: ${parts[2] || 'action'} for ${parts[1] || 'item'}`;
-          } else if (meta?.type === 'protocol_form') {
-            const parts = msg.content.split(':');
-            const formId = parts[1] || 'form';
-            try {
-              const formData = JSON.parse(parts.slice(2).join(':'));
-              content = `User submitted form "${formId}": ${JSON.stringify(formData)}`;
-            } catch {
-              content = `User submitted form "${formId}"`;
-            }
-          } else if (meta?.type === 'protocol_system_event') {
-            const parts = msg.content.split(':');
-            content = `System event (${parts[1] || 'unknown'}): ${parts.slice(2).join(':')}`;
-          }
-          claudeMessages.push({ role: 'user', content });
-        } else if (msg.role === 'assistant') {
-          // Reconstruct assistant message - may include tool calls
-          const contentBlocks: Anthropic.ContentBlockParam[] = [];
-          if (msg.content) {
-            contentBlocks.push({ type: 'text', text: msg.content });
-          }
-          if (msg.toolCalls && Array.isArray(msg.toolCalls)) {
-            for (const tc of msg.toolCalls as any[]) {
-              contentBlocks.push({
-                type: 'tool_use',
-                id: tc.id,
-                name: tc.name,
-                input: tc.input,
-              });
-            }
-          }
-          if (contentBlocks.length > 0) {
-            claudeMessages.push({ role: 'assistant', content: contentBlocks });
-          }
-        } else if (msg.role === 'tool_result') {
-          // Tool results
-          if (msg.toolResults && Array.isArray(msg.toolResults)) {
-            const toolResultBlocks: Anthropic.ToolResultBlockParam[] = (msg.toolResults as any[]).map((tr: any) => ({
-              type: 'tool_result' as const,
-              tool_use_id: tr.tool_use_id,
-              content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
-            }));
-            claudeMessages.push({ role: 'user', content: toolResultBlocks });
-          }
-        }
-      }
-
-      // 4. Build tools for Claude
-      const tools: Anthropic.Tool[] = toolDefinitions.map((t) => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.input_schema as Anthropic.Tool.InputSchema,
-      }));
-
-      // 5. Stream response from Claude with tool-use loop
-      fullResponse = '';
-      let continueLoop = true;
-      streamedText = '';
-      let toolIterations = 0;
-      const toolCallCounts: Record<string, number> = {};
-
-      const abortController = new AbortController();
-      this.activeStreams.set(conversationId, abortController);
-
-      while (continueLoop) {
-        continueLoop = false;
-        toolIterations++;
-
-        // TASK 3: Tool loop guard
-        if (toolIterations > MAX_TOOL_ITERATIONS) {
-          logger.warn({ conversationId, iterations: toolIterations }, 'Tool loop guard triggered');
-          claudeMessages.push({
-            role: 'user',
-            content: 'You have used too many tools in this turn. Please provide a final answer to the user without using any more tools.',
-          });
-          // Do one final call without tools to get the text response
-          const finalStream = this.getClient().messages.stream({
-            model: MODEL,
-            max_tokens: 4096,
-            system: getJerrySystemPrompt(),
-            messages: claudeMessages,
-            // No tools - force text-only response
-          }, { signal: abortController.signal });
-          streamedText = '';
-          finalStream.on('text', (text) => {
-            streamedText += text;
-            fullResponse += text;
-            if (onToken) onToken(text);
-          });
-          await finalStream.finalMessage();
-          break;
-        }
-
-        // TASK 2: Wrap stream creation + consumption in retry logic
-        let currentToolCalls: any[] = [];
-        const preRetryLength = fullResponse.length;
-        let streamError: Error | null = null;
-
-        const createAndConsumeStream = async () => {
-          const stream = this.getClient().messages.stream({
-            model: MODEL,
-            max_tokens: 4096,
-            system: getJerrySystemPrompt(),
-            messages: claudeMessages,
-            tools,
-          }, { signal: abortController.signal });
-
-          // Reset for this attempt
-          currentToolCalls = [];
-          streamedText = '';
-          streamError = null;
-
-          stream.on('text', (text) => {
-            streamedText += text;
-            fullResponse += text;
-            if (onToken) onToken(text);
-          });
-
-          stream.on('error', (error) => {
-            logger.error({ error, conversationId }, 'Stream error from Anthropic');
-            streamError = error;
-          });
-
-          return stream.finalMessage();
-        };
-
-        const finalMessage = await retryWithBackoff(createAndConsumeStream, {
-          maxRetries: 3,
-          baseDelay: 1000,
-          shouldRetry: (error: any) => {
-            const status = error?.status || error?.error?.status;
-            if (status === 429 || status === 529 || status >= 500) return true;
-            if (error?.error?.type === 'overloaded_error') return true;
-            if (!status && error.message?.includes('fetch')) return true; // network error
-            return false;
-          },
-          onRetry: (attempt, error) => {
-            logger.warn({ attempt, error: error.message, conversationId }, 'Retrying Anthropic stream');
-            // Undo partial text accumulated before the failed stream
-            fullResponse = fullResponse.substring(0, preRetryLength);
-          },
-        });
-
-        if (streamError && !finalMessage) {
-          throw streamError;
-        }
-
-        // Check for tool use in the response
-        const toolUseBlocks = finalMessage.content.filter(
-          (block): block is Anthropic.ContentBlock & { type: 'tool_use' } => block.type === 'tool_use'
-        );
-
-        if (toolUseBlocks.length > 0) {
-          // Add assistant message with tool calls to conversation
-          const assistantContent: Anthropic.ContentBlockParam[] = [];
-          for (const block of finalMessage.content) {
-            if (block.type === 'text') {
-              assistantContent.push({ type: 'text', text: block.text });
-            } else if (block.type === 'tool_use') {
-              assistantContent.push({
-                type: 'tool_use',
-                id: block.id,
-                name: block.name,
-                input: block.input as Record<string, unknown>,
-              });
-              currentToolCalls.push({
-                id: block.id,
-                name: block.name,
-                input: block.input,
-              });
-            }
-          }
-          claudeMessages.push({ role: 'assistant', content: assistantContent });
-
-          // Execute each tool
-          const toolResults: Anthropic.ToolResultBlockParam[] = [];
-          for (const toolUse of toolUseBlocks) {
-            toolCallCounts[toolUse.name] = (toolCallCounts[toolUse.name] || 0) + 1;
-            if (toolCallCounts[toolUse.name] > 5) {
-              logger.warn({ tool: toolUse.name, count: toolCallCounts[toolUse.name] }, 'Tool call limit exceeded in single turn');
-              // Return a warning result instead of executing
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: toolUse.id,
-                content: JSON.stringify({ success: false, error: `Tool "${toolUse.name}" has been called too many times in this turn. Please confirm with the user before continuing.` }),
-                is_error: true,
-              });
-              continue; // Skip execution
-            }
-
-            logger.info({ tool: toolUse.name, input: toolUse.input }, 'Executing tool');
-            if (onToolUse) onToolUse(toolUse.name, toolUse.input);
-
-            try {
-              const result = await executeTool(toolUse.name, toolUse.input as Record<string, any>, { conversationId, userId: conversation?.userId || undefined });
-              if (onToolResult) onToolResult(toolUse.name, result);
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: toolUse.id,
-                content: JSON.stringify(result),
-              });
-            } catch (toolError: any) {
-              logger.error({ error: toolError, tool: toolUse.name }, 'Tool execution failed');
-              if (onToolResult) onToolResult(toolUse.name, { success: false, error: toolError.message });
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: toolUse.id,
-                content: JSON.stringify({ success: false, error: toolError.message || 'Tool execution failed' }),
-                is_error: true,
-              });
-            }
-          }
-
-          // Add tool results to messages
-          claudeMessages.push({ role: 'user', content: toolResults });
-
-          // Save tool-use assistant message
-          await prisma.message.create({
-            data: {
-              conversationId,
-              role: 'assistant',
-              content: streamedText,
-              toolCalls: currentToolCalls,
-            },
-          });
-
-          // Save tool results
-          await prisma.message.create({
-            data: {
-              conversationId,
-              role: 'tool_result',
-              content: '',
-              toolResults: toolResults.map((tr) => ({
-                tool_use_id: tr.tool_use_id,
-                content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
-              })) as any,
-            },
-          });
-
-          // If a destructive/sensitive tool was called, force a text-only response
-          // so Claude shows the confirm card and cannot chain further tool calls
-          const requiresConfirmation = toolUseBlocks.some(t => CONFIRMATION_REQUIRED_TOOLS.has(t.name));
-
-          if (requiresConfirmation) {
-            const confirmStream = this.getClient().messages.stream({
-              model: MODEL,
-              max_tokens: 4096,
-              system: getJerrySystemPrompt(),
-              messages: claudeMessages,
-              // No tools — text-only response for the confirm card
-            }, { signal: abortController.signal });
-            streamedText = '';
-            fullResponse = '';
-            confirmStream.on('text', (text) => {
-              streamedText += text;
-              fullResponse += text;
-              if (onToken) onToken(text);
-            });
-            await confirmStream.finalMessage();
-            // Loop ends — user must send CONFIRM to trigger create_workflow
-          } else {
-            fullResponse = ''; // Reset for final response after tool results
-            continueLoop = true; // Continue the loop to get Claude's response after tool results
-          }
-        }
-      }
-
-      // 6. Save final assistant message (text-only, NO tool calls — those were saved in the loop)
-      // Use fullResponse (reset per-iteration) to avoid duplicating text from earlier tool-use rounds,
-      // and sanitize any unfenced jerry:* blocks so the frontend can always parse them.
-      const finalText = ensureJerryBlocksFenced(fullResponse || streamedText);
-      const savedMessage = await prisma.message.create({
-        data: {
+      // CONFIRM:<id>:<decision> — resume an interrupted graph run instead of
+      // starting a new turn.
+      let result: { finalText: string; interrupt: any };
+      if (userMessage.startsWith('CONFIRM:')) {
+        const parts = userMessage.split(':');
+        const decision = (parts[2] === 'confirm' ? 'confirm' : 'cancel') as 'confirm' | 'cancel';
+        const resumed = await resumeLangGraphConfirmation({
           conversationId,
-          role: 'assistant',
-          content: finalText,
-        },
-      });
+          userId: conversation?.userId ?? null,
+          decision,
+          onToken,
+        });
+        result = { finalText: resumed.finalText, interrupt: null };
+      } else {
+        result = await runLangGraphTurn({
+          conversationId,
+          userId: conversation?.userId ?? null,
+          userMessage,
+          signal: abortController.signal,
+          onToken,
+          onToolUse,
+          onToolResult,
+        });
+      }
 
-      // 7. Auto-generate title if this is the first exchange (TASK 5: AI-generated titles)
+      // Auto-title on first exchange (mirrors legacy behaviour)
       const messageCount = await prisma.message.count({ where: { conversationId } });
-      if (messageCount <= 3) {
+      if (messageCount <= 3 && result.finalText) {
         try {
           const titleResponse = await this.getClient().messages.create({
             model: 'claude-haiku-4-5-20251001',
             max_tokens: 20,
-            messages: [
-              {
-                role: 'user',
-                content: `Generate a 3-6 word title for this conversation. Only output the title, nothing else.\n\nUser: ${userMessage}\nAssistant: ${finalText?.substring(0, 200)}`,
-              },
-            ],
+            messages: [{
+              role: 'user',
+              content: `Generate a 3-6 word title for this conversation. Only output the title, nothing else.\n\nUser: ${userMessage}\nAssistant: ${result.finalText.substring(0, 200)}`,
+            }],
           });
           const generatedTitle = (titleResponse.content[0] as any)?.text?.trim();
-          if (generatedTitle && generatedTitle.length > 0) {
+          if (generatedTitle) {
             await prisma.conversation.update({
               where: { id: conversationId },
               data: { title: generatedTitle },
             });
           }
-        } catch (titleError) {
-          logger.warn({ error: titleError, conversationId }, 'Failed to generate AI title, using fallback');
-          const title = userMessage.length > 50 ? userMessage.substring(0, 50) + '...' : userMessage;
-          await prisma.conversation.update({
-            where: { id: conversationId },
-            data: { title },
-          });
+        } catch (err) {
+          logger.warn({ err, conversationId }, 'LangGraph: failed to auto-title conversation');
         }
       }
 
-      // Update conversation updatedAt
       await prisma.conversation.update({
         where: { id: conversationId },
         data: { updatedAt: new Date() },
       });
 
       this.activeStreams.delete(conversationId);
-
-      if (onDone) onDone(finalText);
-
-      return savedMessage;
+      if (onDone) onDone(result.finalText);
+      return { content: result.finalText, interrupt: result.interrupt };
     } catch (error: any) {
-      if (error?.name === 'AbortError' || error?.message?.includes('aborted')) {
-        // Stream was cancelled by user - save partial response
-        if (fullResponse || streamedText) {
-          await prisma.message.create({
-            data: {
-              conversationId,
-              role: 'assistant',
-              content: (fullResponse || streamedText) + '\n\n*[Response cancelled]*',
-            },
-          });
-        }
-        this.activeStreams.delete(conversationId);
-        if (onDone) onDone(fullResponse || streamedText || '');
-        return null;
+      this.activeStreams.delete(conversationId);
+
+      // Abort errors are expected when the user cancels — emit partial done
+      if (error?.name === 'AbortError' || abortController.signal.aborted) {
+        if (onDone) onDone('');
+        return { content: '', interrupt: null };
       }
 
-      // Handle rate limit errors gracefully — operational error, won't be sent to Sentry
       const status = error?.status || error?.error?.status;
       if (status === 429) {
-        logger.warn({ conversationId }, 'Claude API rate limit hit');
         const userMsg = 'I\'m currently experiencing high demand. Please try again in a moment.';
         if (onError) onError(userMsg);
-        this.activeStreams.delete(conversationId);
         throw new RateLimitError(userMsg);
       }
-
-      logger.error({ error, conversationId }, 'Error in sendMessage');
+      logger.error({ error, conversationId }, 'LangGraph sendMessage failed');
       if (onError) onError(error.message || 'An error occurred');
       throw error;
     }
   }
+
   async cancelStream(conversationId: string): Promise<void> {
     const controller = this.activeStreams.get(conversationId);
     if (controller) {

@@ -364,6 +364,17 @@ export function emitWorkflowStarted(conversationId: string, data: {
   workflowId: string;
   name: string;
   totalSteps: number;
+  /** Initial step rows so the frontend can render immediately. */
+  steps?: Array<{
+    order: number;
+    name: string;
+    action: string;
+    status: string;
+    progress?: number;
+    progressTotal?: number;
+    error?: string | null;
+  }>;
+  startedAt?: string;
 }): void {
   const payload = { ...data, conversationId };
   if (conversationId) {

@@ -1,7 +1,16 @@
+export type AgentDomain =
+  | 'permit'
+  | 'contact'
+  | 'campaign'
+  | 'outreach'
+  | 'workflow'
+  | 'system';
+
 export interface ToolDefinition {
   name: string;
   description: string;
   input_schema: Record<string, any>;
+  domain?: AgentDomain;
 }
 
 export type ToolErrorCode = 'VALIDATION' | 'PRECONDITION' | 'SERVICE' | 'INTEGRATION' | 'INTERNAL' | 'QUOTA_EXCEEDED';

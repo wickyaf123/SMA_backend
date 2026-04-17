@@ -26,6 +26,7 @@ router.get('/conversations', chatController.listConversations.bind(chatControlle
 router.get('/conversations/search', chatController.searchConversations.bind(chatController));
 
 router.get('/conversations/:id', chatController.getConversation.bind(chatController));
+router.get('/conversations/:id/activity', chatController.getConversationActivity.bind(chatController));
 router.delete('/conversations/:id', chatController.deleteConversation.bind(chatController));
 router.post('/conversations/:id/messages', chatRateLimiter, chatController.sendMessage.bind(chatController));
 router.post('/conversations/:id/workflow-presets/:presetId/run', chatController.runWorkflowPreset.bind(chatController));

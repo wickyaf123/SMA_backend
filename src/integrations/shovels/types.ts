@@ -20,6 +20,30 @@ export interface ShovelsAddress {
   latlng: [number | null, number | null];
 }
 
+/** Geo identifiers attached to a permit (address/city/county/jurisdiction Shovels opaque IDs). */
+export interface ShovelsGeoIds {
+  address_id: string | null;
+  city_id: string | null;
+  county_id: string | null;
+  jurisdiction_id: string | null;
+}
+
+/** Result row from `GET /v2/addresses/search?q=...` — includes Shovels' opaque geo_id. */
+export interface ShovelsAddressSearchResult {
+  street_no: string | null;
+  street: string | null;
+  city: string | null;
+  county: string | null;
+  zip_code: string | null;
+  zip_code_ext: string | null;
+  state: string | null;
+  jurisdiction: string | null;
+  lat: number | null;
+  long: number | null;
+  geo_id: string;
+  name: string;
+}
+
 export interface ShovelsContractor {
   id: string;
   name: string;
@@ -112,6 +136,8 @@ export interface ShovelsPermit {
   contractor_id: string | null;
   tags: string[] | null;
   address: ShovelsAddress | null;
+  /** Opaque Shovels geo IDs — present on `/permits/search` results, used to look up residents. */
+  geo_ids?: ShovelsGeoIds | null;
 }
 
 export interface ShovelsContractorWithEmployees {

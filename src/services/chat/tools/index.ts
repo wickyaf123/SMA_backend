@@ -17,6 +17,7 @@ import { registerTools as registerRoutingTools } from './routing';
 import { registerTools as registerWorkflowTools } from './workflow';
 import { registerTools as registerHomeownerTools } from './homeowner';
 import { registerTools as registerSettingsTools } from './settings';
+import { registerTools as registerPipelineHealthTools } from './pipeline-health';
 
 // Create registry
 function createRegistry(): ToolRegistry {
@@ -45,6 +46,7 @@ registerRoutingTools(registry);
 registerWorkflowTools(registry);
 registerHomeownerTools(registry);
 registerSettingsTools(registry);
+registerPipelineHealthTools(registry);
 
 // Backward-compatible exports
 export const toolDefinitions: ToolDefinition[] = registry.definitions;

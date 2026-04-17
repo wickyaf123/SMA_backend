@@ -19,6 +19,7 @@ import permitRoutes from './permit.routes';
 import homeownerRoutes from './homeowner.routes';
 import connectionRoutes from './connection.routes';
 import chatRoutes from './chat.routes';
+import chatHealthRoutes from './chat-health.routes';
 
 const router = Router();
 
@@ -80,6 +81,10 @@ router.use('/api/v1/homeowners', authMiddleware, homeownerRoutes);
 
 // Contractor-Homeowner Connections
 router.use('/api/v1/connections', authMiddleware, connectionRoutes);
+
+// Jerry pipeline observability / health — must come BEFORE /api/v1/chat
+// so the more-specific prefix wins on route matching.
+router.use('/api/v1/chat/health', authMiddleware, chatHealthRoutes);
 
 // Chat / Jerry AI
 router.use('/api/v1/chat', authMiddleware, chatRoutes);

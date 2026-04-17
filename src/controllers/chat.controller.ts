@@ -39,6 +39,65 @@ export class ChatController {
     }
   }
 
+  /**
+   * GET /api/v1/chat/conversations/:id/activity
+   * Returns workflows, permit searches, and import jobs scoped to this conversation.
+   * Used to hydrate JobsPanel / WorkflowProgress when re-entering a chat —
+   * WebSocket events only cover the current session, so historical activity
+   * needs a DB pull.
+   */
+  async getConversationActivity(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params;
+      const userId = req.user?.userId;
+      // Authorize via getConversation (throws if not authorized)
+      await chatService.getConversation(id, userId);
+
+      const [workflows, permitSearches, importJobs] = await Promise.all([
+        prisma.workflow.findMany({
+          where: { conversationId: id },
+          orderBy: { createdAt: 'desc' },
+          take: 25,
+          include: {
+            steps: {
+              orderBy: { order: 'asc' },
+              select: {
+                id: true,
+                order: true,
+                name: true,
+                action: true,
+                status: true,
+                progress: true,
+                progressTotal: true,
+                error: true,
+              },
+            },
+          },
+        }),
+        prisma.permitSearch.findMany({
+          where: { conversationId: id },
+          orderBy: { createdAt: 'desc' },
+          take: 25,
+        }),
+        // ImportJob has no conversationId column — filter by metadata->>'conversationId'
+        prisma.importJob.findMany({
+          where: {
+            metadata: {
+              path: ['conversationId'],
+              equals: id,
+            } as any,
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 25,
+        }),
+      ]);
+
+      sendSuccess(res, { workflows, permitSearches, importJobs });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async deleteConversation(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = req.user?.userId;
@@ -72,15 +131,15 @@ export class ChatController {
           }
         },
         // onToolUse - notify client about tool execution
-        (toolName: string, toolInput: any) => {
+        (toolName: string, toolInput: any, toolCallId?: string) => {
           if (io) {
-            io.to(room).emit('chat:tool_use', { conversationId: id, tool: toolName, input: toolInput });
+            io.to(room).emit('chat:tool_use', { conversationId: id, tool: toolName, input: toolInput, toolCallId });
           }
         },
         // onToolResult - send tool result to client
-        (toolName: string, result: any) => {
+        (toolName: string, result: any, toolCallId?: string) => {
           if (io) {
-            io.to(room).emit('chat:tool_result', { conversationId: id, tool: toolName, result });
+            io.to(room).emit('chat:tool_result', { conversationId: id, tool: toolName, result, toolCallId });
           }
         },
         // onDone - signal completion
@@ -129,10 +188,44 @@ export class ChatController {
         return;
       }
 
+      // Denormalise turn context onto the feedback row so analytics queries
+      // don't need to join through Message→ChatTurn→ToolExecution fan-out.
+      const msg = await prisma.message.findUnique({
+        where: { id: messageId },
+        select: {
+          turnId: true,
+          turn: {
+            select: {
+              exitNode: true,
+              toolExecutions: { select: { toolName: true } },
+            },
+          },
+        },
+      });
+
+      const turnId = msg?.turnId ?? null;
+      const nodeLabel = msg?.turn?.exitNode ?? null;
+      const toolNames = Array.from(
+        new Set((msg?.turn?.toolExecutions ?? []).map((t) => t.toolName)),
+      );
+
       const feedback = await prisma.messageFeedback.upsert({
         where: { messageId },
-        create: { messageId, rating, comment: comment || null },
-        update: { rating, comment: comment || null },
+        create: {
+          messageId,
+          rating,
+          comment: comment || null,
+          turnId: turnId ?? undefined,
+          nodeLabel: nodeLabel ?? undefined,
+          toolNames,
+        },
+        update: {
+          rating,
+          comment: comment || null,
+          turnId: turnId ?? undefined,
+          nodeLabel: nodeLabel ?? undefined,
+          toolNames,
+        },
       });
 
       sendSuccess(res, feedback);

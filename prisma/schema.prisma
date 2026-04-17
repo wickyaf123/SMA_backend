@@ -1051,6 +1051,17 @@ enum TemplateChannel {
   EMAIL
 }
 
+model UserPreference {
+  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  userId    String
+  key       String
+  value     Json
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
 model Conversation {
   id                    String    @id @default(dbgenerated("(gen_random_uuid())::text"))
   title                 String?
@@ -1074,20 +1085,124 @@ model Message {
   toolCalls      Json?
   toolResults    Json?
   metadata       Json?
+  turnId         String?
+  turn           ChatTurn?        @relation(fields: [turnId], references: [id], onDelete: SetNull)
   createdAt      DateTime         @default(now()) @db.Timestamptz(6)
   feedback       MessageFeedback?
 
   @@index([conversationId])
   @@index([createdAt])
+  @@index([turnId])
 }
 
 model MessageFeedback {
-  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
-  messageId String   @unique
-  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  id        String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  messageId String    @unique
+  message   Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
   rating    String // 'up' | 'down'
   comment   String?
+  turnId    String?
+  turn      ChatTurn? @relation("TurnFeedback", fields: [turnId], references: [id], onDelete: SetNull)
+  nodeLabel String?
+  toolNames String[]  @default([])
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([turnId])
+  @@index([rating, createdAt])
+}
+
+enum TurnStatus {
+  RUNNING
+  COMPLETED
+  INTERRUPTED
+  CANCELLED
+  ERRORED
+}
+
+enum ToolExecStatus {
+  SUCCESS
+  VALIDATION_ERROR
+  PRECONDITION_ERROR
+  SERVICE_ERROR
+  INTEGRATION_ERROR
+  INTERNAL_ERROR
+  ZERO_RESULTS
+}
+
+model ChatTurn {
+  id                 String            @id @default(dbgenerated("(gen_random_uuid())::text"))
+  conversationId     String
+  userId             String?
+  userMessageId      String?
+  assistantMessageId String?
+  engine             String
+  protocol           String?
+  entryNode          String?
+  exitNode           String?
+  nodePath           String[]          @default([])
+  status             TurnStatus        @default(RUNNING)
+  interruptReason    String?
+  confirmDecision    String?
+  routerLabel        String?
+  promptTokens       Int               @default(0)
+  completionTokens   Int               @default(0)
+  totalTokens        Int               @default(0)
+  toolCallCount      Int               @default(0)
+  toolErrorCount     Int               @default(0)
+  durationMs         Int?
+  startedAt          DateTime          @default(now()) @db.Timestamptz(6)
+  endedAt            DateTime?         @db.Timestamptz(6)
+  errorMessage       String?
+  metadata           Json?
+  toolExecutions     ToolExecution[]
+  events             TurnEvent[]
+  messages           Message[]
+  feedback           MessageFeedback[] @relation("TurnFeedback")
+
+  @@index([conversationId, startedAt])
+  @@index([userId, startedAt])
+  @@index([status])
+  @@index([routerLabel, startedAt])
+  @@index([startedAt])
+}
+
+model ToolExecution {
+  id             String         @id @default(dbgenerated("(gen_random_uuid())::text"))
+  turnId         String
+  turn           ChatTurn       @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  conversationId String
+  toolName       String
+  callerNode     String?
+  toolCallId     String?
+  input          Json?
+  output         Json?
+  status         ToolExecStatus
+  errorCode      String?
+  errorMessage   String?
+  resultCount    Int?
+  durationMs     Int
+  startedAt      DateTime       @default(now()) @db.Timestamptz(6)
+  endedAt        DateTime?      @db.Timestamptz(6)
+
+  @@index([toolName, startedAt])
+  @@index([status, startedAt])
+  @@index([turnId])
+  @@index([conversationId, startedAt])
+}
+
+model TurnEvent {
+  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  turnId    String
+  turn      ChatTurn @relation(fields: [turnId], references: [id], onDelete: Cascade)
+  seq       Int
+  type      String
+  node      String?
+  toolName  String?
+  payload   Json?
   createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([turnId, seq])
+  @@index([type, createdAt])
 }
 
 model Workflow {

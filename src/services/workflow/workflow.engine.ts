@@ -178,6 +178,19 @@ class WorkflowEngine {
       workflowId,
       name: workflow.name,
       totalSteps: workflow.totalSteps,
+      // Include the full step list so the frontend can render rows immediately
+      // instead of waiting for per-step events (which only set status on rows
+      // it already has). Without this, WorkflowProgress renders an empty card.
+      steps: workflow.steps.map((s) => ({
+        order: s.order,
+        name: s.name,
+        action: s.action,
+        status: (s.status as string).toLowerCase(),
+        progress: s.progress ?? undefined,
+        progressTotal: s.progressTotal ?? undefined,
+        error: s.error ?? undefined,
+      })),
+      startedAt: new Date().toISOString(),
     });
 
     workflowLogger.info({ name: workflow.name, totalSteps: workflow.totalSteps }, 'Workflow execution started');

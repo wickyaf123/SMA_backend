@@ -5,12 +5,14 @@ import { logger } from './utils/logger';
 import { connectDatabase, disconnectDatabase } from './config/database';
 import { checkRedisHealth, disconnectRedis } from './config/redis';
 import { initializeScheduler, stopScheduler } from './jobs/scheduler';
+import { startChatHealthSweeper, stopChatHealthSweeper } from './jobs/chat-health-sweeper';
 import { initSentry, Sentry } from './config/sentry';
 import { settingsService } from './services/settings/settings.service';
 import { initializeWebSocket, closeWebSocket } from './config/websocket';
 import { initializeWorkers, stopWorkers } from './jobs/worker';
 import { closeQueues } from './jobs/queues';
 import { workflowEngine } from './services/workflow/workflow.engine';
+import { getJerryGraph } from './services/chat/agent/graph';
 
 /**
  * Initialize default settings (ensures settings record exists)
@@ -74,6 +76,14 @@ async function startServer() {
     initializeWebSocket(httpServer);
     logger.info('✓ WebSocket server initialized');
 
+    // Warm-compile Jerry's LangGraph and validate checkpointer connection
+    try {
+      await getJerryGraph();
+      logger.info('✓ Jerry LangGraph compiled and checkpointer connected');
+    } catch (err) {
+      logger.error({ err }, '✗ Jerry LangGraph failed to compile — chat will retry on first request');
+    }
+
     // Recover workflows stuck from previous crash
     const recovery = await workflowEngine.recoverStuckWorkflows();
     if (recovery.failed > 0) {
@@ -88,6 +98,10 @@ async function startServer() {
     // Cron now adds jobs to queues instead of running directly
     await initializeScheduler();
     logger.info('✓ Daily automation jobs scheduled with database schedules');
+
+    // Jerry pipeline observability sweeper — checks KPIs every 5min,
+    // emits Pino warnings + Sentry breadcrumbs on threshold breaches.
+    startChatHealthSweeper();
 
     // Start listening
     const server = httpServer.listen(config.port, () => {
@@ -108,6 +122,7 @@ async function startServer() {
 
       // Stop cron jobs
       stopScheduler();
+      stopChatHealthSweeper();
       logger.info('✓ Cron jobs stopped');
 
       // Stop BullMQ workers

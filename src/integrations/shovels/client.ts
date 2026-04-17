@@ -8,6 +8,7 @@ import type {
   ShovelsEmployee,
   ShovelsPermit,
   ShovelsResident,
+  ShovelsAddressSearchResult,
   ShovelsApiResponse,
   ShovelsUsageResponse,
   ShovelsQuotaStatus,
@@ -274,6 +275,58 @@ export class ShovelsClient {
       if (err instanceof ShovelsCreditLimitError) throw err;
       if (err.response?.status === 404) return [];
       logger.warn({ addressId, error: err.message }, 'Shovels address residents lookup failed');
+      return [];
+    }
+  }
+
+  /**
+   * Search permits filed in a geo (ZIP works) within a date window.
+   *
+   * Unlike `searchContractors` (which can return contractors whose work is
+   * elsewhere), this returns the permits THEMSELVES, each carrying
+   * `geo_ids.address_id` — the opaque ID required by `/addresses/{id}/residents`.
+   * This is the right starting point for homeowner discovery.
+   *
+   * Note: the `tags` query parameter is ignored by `/permits/search` —
+   * filter `permit.type` / `permit.subtype` / `permit.tags` client-side.
+   */
+  async searchPermits(
+    params: { geo_id: string; permit_from: string; permit_to: string; size?: number },
+    maxResults?: number
+  ): Promise<ShovelsPermit[]> {
+    const results: ShovelsPermit[] = [];
+    let cursor: string | undefined;
+    do {
+      const data = await this.trackedGet<ShovelsApiResponse<ShovelsPermit>>(
+        '/permits/search',
+        { ...params, cursor, size: params.size || 50 }
+      );
+      results.push(...(data.items || []));
+      if (maxResults && results.length >= maxResults) break;
+      cursor = data.next_cursor ?? undefined;
+    } while (cursor);
+    const trimmed = maxResults ? results.slice(0, maxResults) : results;
+    logger.info({ total: trimmed.length, geoId: params.geo_id }, 'Shovels permits/search complete');
+    return trimmed;
+  }
+
+  /**
+   * Resolve a free-text query (city, address, "Scottsdale, AZ") into Shovels
+   * address rows. Each row carries a Shovels-native `geo_id` token (e.g. "ApD_68PkCgU"),
+   * which is the only form Shovels accepts on residents endpoints.
+   *
+   * Used as a fallback when our local ZIP dictionary has no entry for a city.
+   */
+  async searchAddresses(q: string, size: number = 5): Promise<ShovelsAddressSearchResult[]> {
+    try {
+      const data = await this.trackedGet<ShovelsApiResponse<ShovelsAddressSearchResult>>(
+        '/addresses/search',
+        { q, size }
+      );
+      return data.items || [];
+    } catch (err: any) {
+      if (err instanceof ShovelsCreditLimitError) throw err;
+      logger.warn({ q, error: err.message }, 'Shovels addresses/search failed');
       return [];
     }
   }

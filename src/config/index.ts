@@ -66,8 +66,8 @@ const envSchema = z.object({
   CLAY_WEBHOOK_SECRET: z.string().optional(),
   CLAY_TABLE_URL: z.string().url().optional(),
 
-  // Anthropic (Reply Classification)
-  ANTHROPIC_API_KEY: z.string().optional(),
+  // Anthropic (Jerry AI)
+  ANTHROPIC_API_KEY: z.string().min(1, 'ANTHROPIC_API_KEY is required'),
 
   // GoHighLevel (Phase 3.5 - SMS + Unified Inbox + Email Notifications)
   GHL_API_KEY: z.string().optional(),

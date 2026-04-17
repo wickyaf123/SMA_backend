@@ -214,11 +214,15 @@ export class JobScheduler {
   }
 
   /**
-   * Run a job with logging and error handling
+   * Run a job with logging and error handling.
+   * `extraMetadata` is merged into the ImportJob.metadata column so callers
+   * (e.g. chat tools) can stamp `conversationId` for downstream activity
+   * hydration on `/api/v1/chat/conversations/:id/activity`.
    */
   private async runJobWithLogging(
     jobType: JobType,
-    jobFunction: () => Promise<any>
+    jobFunction: () => Promise<any>,
+    extraMetadata?: Record<string, any>
   ): Promise<void> {
     // Check if scheduler is globally enabled
     const settings = await settingsService.getSettings();
@@ -228,8 +232,9 @@ export class JobScheduler {
     }
 
     const jobId = await jobLogService.startJob(jobType, {
-      scheduledRun: true,
+      scheduledRun: !extraMetadata?.manual,
       timestamp: new Date(),
+      ...extraMetadata,
     });
 
     try {
@@ -297,17 +302,21 @@ export class JobScheduler {
 
   /**
    * Manually trigger a job (for testing or manual runs)
-   * Can optionally use queue for async processing
+   * Can optionally use queue for async processing.
+   *
+   * `metadata` is stamped onto the ImportJob row so callers (e.g. the
+   * `trigger_job` chat tool) can include `conversationId` for chat-activity
+   * hydration.
    */
   async triggerJob(
     jobName: 'shovels' | 'homeowner' | 'connection' | 'enrich' | 'merge' | 'validate' | 'enroll',
-    options?: { useQueue?: boolean }
+    options?: { useQueue?: boolean; metadata?: Record<string, any> }
   ): Promise<any> {
-    logger.info({ jobName, useQueue: options?.useQueue }, 'Manually triggering job');
+    logger.info({ jobName, useQueue: options?.useQueue, metadata: options?.metadata }, 'Manually triggering job');
 
     // If useQueue is true, add to queue instead of running directly
     if (options?.useQueue) {
-      return await this.addJobToQueue(jobName);
+      return await this.addJobToQueue(jobName, options?.metadata);
     }
 
     // Direct execution with logging (wraps in runJobWithLogging for ImportJob tracking)
@@ -347,16 +356,44 @@ export class JobScheduler {
       }
     };
 
-    return await this.runJobWithLogging(jobType as any, getJobFn);
+    return await this.runJobWithLogging(jobType as any, getJobFn, options?.metadata);
   }
 
   /**
    * Add a job to the appropriate queue for async processing
-   * Returns immediately with job ID
+   * Returns immediately with job ID. `metadata` is forwarded to the
+   * BullMQ payload so the worker can stamp it on the resulting ImportJob.
    */
   async addJobToQueue(
-    jobName: 'shovels' | 'homeowner' | 'connection' | 'enrich' | 'merge' | 'validate' | 'enroll'
+    jobName: 'shovels' | 'homeowner' | 'connection' | 'enrich' | 'merge' | 'validate' | 'enroll',
+    metadata?: Record<string, any>
   ): Promise<{ queued: true; jobId: string }> {
+    // Create a placeholder ImportJob row up-front so the chat-activity
+    // hydration endpoint can find this run by `metadata.conversationId`.
+    // The BullMQ worker doesn't currently update this row — it stays
+    // PROCESSING and is reaped by retention rules. Acceptable trade-off
+    // for now; longer term the workers should call completeJob/failJob.
+    const jobTypeMap: Record<string, string> = {
+      shovels: 'SHOVELS_SCRAPE',
+      homeowner: 'HOMEOWNER_SCRAPE',
+      connection: 'CONNECTION_RESOLVE',
+      enrich: 'ENRICH',
+      merge: 'MERGE',
+      validate: 'VALIDATE',
+      enroll: 'AUTO_ENROLL',
+    };
+    let importJobId: string | null = null;
+    if (metadata && (metadata.conversationId || metadata.triggeredFrom)) {
+      try {
+        importJobId = await jobLogService.startJob(jobTypeMap[jobName] as any, {
+          queued: true,
+          ...metadata,
+        });
+      } catch (err: any) {
+        logger.warn({ err: err.message, jobName }, 'addJobToQueue: ImportJob placeholder creation failed');
+      }
+    }
+
     let job;
 
     switch (jobName) {

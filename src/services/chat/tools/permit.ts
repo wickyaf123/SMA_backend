@@ -444,7 +444,7 @@ const handlers: Record<string, ToolHandler> = {
         success: true,
         data: {
           found: false,
-          message: `No GeoID found for "${city}${state ? ', ' + state : ''}". The city may not be in our database. Please ask the user for their county FIPS code.`,
+          message: `No GeoID found for "${city}${state ? ', ' + state : ''}". The city may not be in the Shovels geo index. Please ask the user for their county FIPS code.`,
         },
       };
     }
@@ -593,6 +593,6 @@ const handlers: Record<string, ToolHandler> = {
 
 export function registerTools(registry: ToolRegistry): void {
   for (const def of definitions) {
-    registry.register(def, handlers[def.name]);
+    registry.register({ ...def, domain: 'permit' }, handlers[def.name]);
   }
 }
