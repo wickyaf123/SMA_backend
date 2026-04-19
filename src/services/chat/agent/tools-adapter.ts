@@ -52,9 +52,59 @@ function toBoundTool(def: ToolDefinition) {
           conversationId: conversationId ?? '',
           userId,
         });
+
+        // Post-call success check: event-emitting tools that return
+        // success:false should also be surfaced to /admin/issues since
+        // they signal tool-level failures (quota, validation, timeouts)
+        // that would otherwise just round-trip back to Jerry as text.
+        if (
+          result &&
+          typeof result === 'object' &&
+          (result as any).success === false &&
+          EVENT_EMITTING_TOOLS.has(def.name)
+        ) {
+          try {
+            const { logIssue } = await import('../../../services/observability/issue-log.service');
+            void logIssue({
+              category: 'TOOL_EXECUTION_FAILED',
+              severity: 'WARN',
+              message: `Tool "${def.name}" returned success:false — ${String((result as any).error || (result as any).code || 'no error message')}`,
+              conversationId: conversationId ?? null,
+              payload: {
+                tool: def.name,
+                code: (result as any).code,
+                error: (result as any).error,
+                input,
+              },
+            });
+          } catch {
+            // non-blocking
+          }
+        }
+
         return JSON.stringify(result);
       } catch (err: any) {
         logger.error({ err, tool: def.name }, 'LangGraph tool execution failed');
+        // Log thrown errors as IssueEvents so ops/admin can see patterns
+        // (Shovels timeouts, null-ref bugs, auth failures) over time
+        // instead of just "once in a log somewhere."
+        try {
+          const { logIssue } = await import('../../../services/observability/issue-log.service');
+          void logIssue({
+            category: 'TOOL_EXECUTION_FAILED',
+            severity: 'ERROR',
+            message: `Tool "${def.name}" threw: ${err?.message || 'unknown error'}`,
+            conversationId: conversationId ?? null,
+            payload: {
+              tool: def.name,
+              errorName: err?.name,
+              errorMessage: err?.message,
+              inputKeys: Object.keys(input ?? {}),
+            },
+          });
+        } catch {
+          // non-blocking
+        }
         return JSON.stringify({
           success: false,
           error: err?.message || 'Tool execution failed',

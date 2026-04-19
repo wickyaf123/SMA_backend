@@ -465,19 +465,81 @@ export class PermitPipelineService {
         status: 'ENRICHING',
         updatedAt: { lt: cutoff },
       },
-      select: { id: true },
+      select: { id: true, conversationId: true, permitType: true, city: true, createdAt: true },
     });
 
     if (stuckSearches.length === 0) return 0;
 
     logger.info({ count: stuckSearches.length, maxAgeMs }, 'Recovering stuck ENRICHING searches');
 
+    const { logIssue } = await import('../observability/issue-log.service');
+
     for (const search of stuckSearches) {
+      // Classify: was Clay silent (no callbacks) or did we just run out of
+      // time enriching a legitimate backlog? If ALL contacts for this search
+      // are still PENDING, it's a Clay webhook timeout — surface that clearly
+      // so the user/admin can see it vs. a normal in-progress enrichment.
+      const pendingCount = await prisma.contact.count({
+        where: { permitSearchId: search.id, clayEnrichmentStatus: 'PENDING' },
+      });
+      const totalCount = await prisma.contact.count({
+        where: { permitSearchId: search.id },
+      });
+      const clayTimeout = totalCount > 0 && pendingCount === totalCount;
+      const elapsedMs = Date.now() - search.createdAt.getTime();
+
+      if (clayTimeout) {
+        void logIssue({
+          category: 'CLAY_WEBHOOK_TIMEOUT',
+          severity: 'ERROR',
+          message: `Clay enrichment timeout for ${search.permitType || 'permit'} search in ${search.city || 'unknown'} — ${pendingCount}/${totalCount} contacts still PENDING after ${Math.round(elapsedMs / 60000)} min`,
+          conversationId: search.conversationId ?? null,
+          jobId: search.id,
+          payload: {
+            pendingCount,
+            totalCount,
+            elapsedMinutes: Math.round(elapsedMs / 60000),
+            permitType: search.permitType,
+            city: search.city,
+          },
+        });
+      }
+
       // Mark remaining PENDING contacts as INCOMPLETE so finalization can proceed
       await prisma.contact.updateMany({
         where: { permitSearchId: search.id, clayEnrichmentStatus: 'PENDING' },
         data: { clayEnrichmentStatus: 'INCOMPLETE' },
       });
+
+      // Annotate the search's diagnostics blob with the recovery context so
+      // the UI's success-state card can render "Warning: Clay enrichment
+      // timed out — contacts have partial data."
+      const existing = await prisma.permitSearch.findUnique({
+        where: { id: search.id },
+        select: { diagnostics: true },
+      });
+      const mergedDiagnostics: any = {
+        ...((existing?.diagnostics as any) || {}),
+        recovered: true,
+        recoveryReason: clayTimeout
+          ? 'Clay enrichment webhook never completed — contacts finalized with partial data.'
+          : 'Enrichment timed out before all contacts completed — remaining contacts marked INCOMPLETE.',
+        recoveryElapsedMinutes: Math.round(elapsedMs / 60000),
+      };
+      await prisma.permitSearch.update({
+        where: { id: search.id },
+        data: { diagnostics: mergedDiagnostics },
+      });
+
+      void logIssue({
+        category: 'STUCK_JOB_RECOVERED',
+        severity: 'WARN',
+        message: `Stuck permit search recovered (${pendingCount}/${totalCount} pending, ${Math.round(elapsedMs / 60000)} min elapsed)`,
+        conversationId: search.conversationId ?? null,
+        jobId: search.id,
+        payload: { pendingCount, totalCount, clayTimeout },
+      });
+
       await this.buildSheetForSearch(search.id);
     }
 

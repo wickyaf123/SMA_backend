@@ -213,6 +213,18 @@ class WorkflowEngine {
     const stepOutputs: Record<number, any> = {};
     let completedCount = 0;
 
+    // Per-step result log. Used at the end to build a user-visible summary
+    // so the workflow card can show "3 succeeded, 1 failed, 1 skipped" with
+    // expandable details instead of a generic "Completed".
+    type StepSummaryEntry = {
+      order: number;
+      name: string;
+      status: 'completed' | 'failed' | 'skipped';
+      error?: string | null;
+      reason?: string | null;
+    };
+    const stepSummary: StepSummaryEntry[] = [];
+
     try {
       for (const step of workflow.steps) {
         // Re-check workflow status (it may have been cancelled externally)
@@ -247,6 +259,13 @@ class WorkflowEngine {
             emitWorkflowStepSkipped(conversationId, {
               workflowId,
               stepOrder: step.order,
+              reason: 'Condition not met',
+            });
+
+            stepSummary.push({
+              order: step.order,
+              name: step.name,
+              status: 'skipped',
               reason: 'Condition not met',
             });
 
@@ -337,6 +356,12 @@ class WorkflowEngine {
 
           workflowLogger.info({ stepOrder: step.order, stepName: step.name }, 'Step completed');
 
+          stepSummary.push({
+            order: step.order,
+            name: step.name,
+            status: 'completed',
+          });
+
         } catch (stepError: any) {
           const errorMessage = stepError instanceof Error ? stepError.message : String(stepError);
           const onFailure = step.onFailure || 'skip';
@@ -384,9 +409,20 @@ class WorkflowEngine {
               },
             });
 
+            stepSummary.push({
+              order: step.order,
+              name: step.name,
+              status: 'failed',
+              error: errorMessage,
+              reason: 'onFailure=abort — halted workflow',
+            });
+
             emitWorkflowFailed(conversationId, {
               workflowId,
               error: `Step ${step.order} (${step.name}) failed: ${errorMessage}`,
+              completedSteps: completedCount,
+              totalSteps: workflow.totalSteps,
+              stepSummary,
             });
 
             return;
@@ -437,9 +473,20 @@ class WorkflowEngine {
                 },
               });
 
+              stepSummary.push({
+                order: step.order,
+                name: step.name,
+                status: 'failed',
+                error: errorMessage,
+                reason: `Exhausted ${currentRetryCount - 1} retries`,
+              });
+
               emitWorkflowFailed(conversationId, {
                 workflowId,
                 error: `Step ${step.order} (${step.name}) failed after ${currentRetryCount - 1} retries: ${errorMessage}`,
+                completedSteps: completedCount,
+                totalSteps: workflow.totalSteps,
+                stepSummary,
               });
 
               activeAbortControllers.delete(workflowId);
@@ -501,6 +548,14 @@ class WorkflowEngine {
             // Store null output so downstream $ref won't break
             stepOutputs[step.order] = null;
 
+            stepSummary.push({
+              order: step.order,
+              name: step.name,
+              status: 'skipped',
+              error: errorMessage,
+              reason: 'onFailure=skip — continued after failure',
+            });
+
             workflowLogger.info({ stepOrder: step.order }, 'Step skipped after failure');
           }
         }
@@ -511,6 +566,7 @@ class WorkflowEngine {
         completedSteps: completedCount,
         totalSteps: workflow.totalSteps,
         stepOutputs,
+        stepSummary,
       };
 
       await prisma.workflow.update({
@@ -526,6 +582,9 @@ class WorkflowEngine {
       emitWorkflowCompleted(conversationId, {
         workflowId,
         result: finalResult,
+        completedSteps: completedCount,
+        totalSteps: workflow.totalSteps,
+        stepSummary,
       });
 
       activeAbortControllers.delete(workflowId);
@@ -548,6 +607,9 @@ class WorkflowEngine {
       emitWorkflowFailed(conversationId, {
         workflowId,
         error: errorMessage,
+        completedSteps: completedCount,
+        totalSteps: workflow.totalSteps,
+        stepSummary,
       });
 
       activeAbortControllers.delete(workflowId);
@@ -705,6 +767,94 @@ class WorkflowEngine {
 
     logger.info({ failed }, 'Workflow crash recovery complete');
     return { failed, resumed: 0 };
+  }
+
+  /**
+   * Proactively recover workflows that have been sitting in RUNNING/PENDING/
+   * PAUSED with no updatedAt activity for longer than `maxAgeMs`. Unlike the
+   * crash-recovery path, this runs periodically from the scheduler and emits
+   * WORKFLOW_FAILED events + logs IssueEvents so users/admins see why.
+   */
+  async recoverStuckRunningWorkflows(maxAgeMs: number = 20 * 60 * 1000): Promise<number> {
+    const cutoff = new Date(Date.now() - maxAgeMs);
+    const stuck = await prisma.workflow.findMany({
+      where: {
+        status: { in: ['RUNNING', 'PENDING', 'PAUSED'] },
+        updatedAt: { lt: cutoff },
+      },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        conversationId: true,
+        startedAt: true,
+        completedSteps: true,
+        totalSteps: true,
+      },
+    });
+
+    if (stuck.length === 0) return 0;
+
+    logger.warn(
+      { count: stuck.length, maxAgeMs },
+      'Found stuck workflows past stall threshold — marking FAILED + emitting events'
+    );
+
+    const { logIssue } = await import('../observability/issue-log.service');
+    const elapsedMinutes = (wf: { startedAt: Date | null }) => {
+      if (!wf.startedAt) return null;
+      return Math.round((Date.now() - wf.startedAt.getTime()) / 60_000);
+    };
+
+    let failed = 0;
+    for (const wf of stuck) {
+      const minutes = elapsedMinutes(wf);
+      const reason = `Workflow stuck in ${wf.status} for more than ${Math.round(maxAgeMs / 60_000)}min (elapsed ${minutes ?? '?'}min). Auto-failed by watchdog.`;
+
+      await prisma.workflow.update({
+        where: { id: wf.id },
+        data: {
+          status: 'FAILED',
+          error: reason,
+          completedAt: new Date(),
+        },
+      });
+
+      await prisma.workflowStep.updateMany({
+        where: { workflowId: wf.id, status: { in: ['RUNNING', 'PENDING'] } },
+        data: { status: 'SKIPPED', error: 'Skipped by stuck-workflow watchdog.' },
+      });
+
+      // Fire the event so any connected client sees the card transition to
+      // failed instead of staying stuck. `emitWorkflowFailed` is a no-op if
+      // there's no conversationId, which we also log as an issue.
+      if (wf.conversationId) {
+        emitWorkflowFailed(wf.conversationId, {
+          workflowId: wf.id,
+          error: reason,
+          completedSteps: wf.completedSteps,
+          totalSteps: wf.totalSteps,
+        });
+      }
+
+      void logIssue({
+        category: 'STUCK_JOB_RECOVERED',
+        severity: 'ERROR',
+        message: `Workflow "${wf.name}" stuck >${Math.round(maxAgeMs / 60_000)}min — auto-failed by watchdog`,
+        conversationId: wf.conversationId ?? null,
+        workflowId: wf.id,
+        payload: {
+          status: wf.status,
+          completedSteps: wf.completedSteps,
+          totalSteps: wf.totalSteps,
+          elapsedMinutes: minutes,
+        },
+      });
+
+      failed++;
+    }
+
+    return failed;
   }
 
   // ==================== PRIVATE HELPERS ====================

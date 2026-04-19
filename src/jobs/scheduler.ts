@@ -115,6 +115,16 @@ export class JobScheduler {
         return { success: true, totalRecords: recovered, contactsProcessed: recovered };
       });
 
+      // Recover workflows stuck in RUNNING/PENDING/PAUSED >20 min. Runs on
+      // the same 15-minute cadence as the permit-recovery scan above. The
+      // watchdog emits WORKFLOW_FAILED events + IssueEvents so users see the
+      // failure instead of the card staying frozen forever.
+      await this.scheduleJob('workflow-recovery', '*/15 * * * *', 'PERMIT_RECOVERY', async () => {
+        const { workflowEngine } = await import('../services/workflow/workflow.engine');
+        const failed = await workflowEngine.recoverStuckRunningWorkflows();
+        return { success: true, totalRecords: failed, contactsProcessed: 0 };
+      });
+
       this.isInitialized = true;
       this.logScheduleSummary();
 

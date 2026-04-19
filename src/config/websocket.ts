@@ -566,6 +566,15 @@ export function emitWorkflowStepSkipped(conversationId: string, data: {
 export function emitWorkflowCompleted(conversationId: string, data: {
   workflowId: string;
   result: any;
+  completedSteps?: number;
+  totalSteps?: number;
+  stepSummary?: Array<{
+    order: number;
+    name: string;
+    status: string;
+    error?: string | null;
+    reason?: string | null;
+  }>;
 }): void {
   const payload = { ...data, conversationId };
   if (conversationId) {
@@ -580,6 +589,15 @@ export function emitWorkflowCompleted(conversationId: string, data: {
 export function emitWorkflowFailed(conversationId: string, data: {
   workflowId: string;
   error: string;
+  completedSteps?: number;
+  totalSteps?: number;
+  stepSummary?: Array<{
+    order: number;
+    name: string;
+    status: string;
+    error?: string | null;
+    reason?: string | null;
+  }>;
 }): void {
   const payload = { ...data, conversationId };
   if (conversationId) {
