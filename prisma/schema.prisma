@@ -908,6 +908,7 @@ model PermitSearch {
   googleSheetId   String?
   conversationId  String?
   userId          String?
+  diagnostics     Json?
   user            User?              @relation(fields: [userId], references: [id])
   createdAt       DateTime           @default(now()) @db.Timestamptz(6)
   updatedAt       DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
@@ -1268,4 +1269,38 @@ enum WorkflowStepStatus {
   COMPLETED
   FAILED
   SKIPPED
+}
+
+model IssueEvent {
+  id             String            @id @default(dbgenerated("(gen_random_uuid())::text"))
+  category       IssueCategory
+  severity       IssueSeverity     @default(WARN)
+  conversationId String?
+  turnId         String?
+  workflowId     String?
+  jobId          String?
+  message        String
+  payload        Json?
+  createdAt      DateTime          @default(now()) @db.Timestamptz(6)
+
+  @@index([category, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([createdAt])
+}
+
+enum IssueCategory {
+  WORKFLOW_UI_MISSING
+  SILENT_EMPTY_RESULT
+  STATE_RACE_DETECTED
+  SOCKET_EVENT_DROPPED
+  PIPELINE_TIER_EXHAUSTED
+  RELEVANCE_FILTER_ALL_REJECTED
+  HOMEOWNER_FALLBACK_FAILED
+  WORKFLOW_MISSING_CONVERSATION_ID
+}
+
+enum IssueSeverity {
+  INFO
+  WARN
+  ERROR
 }

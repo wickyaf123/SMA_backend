@@ -29,11 +29,15 @@ const definitions: ToolDefinition[] = [
         },
         startDate: {
           type: 'string',
-          description: 'Start date in YYYY-MM-DD format',
+          description: 'Start date in YYYY-MM-DD format. Required for anything other than "last 12 months". If user says "last N years", "10-15 years old", or "aging installations", pass an explicit startDate OR use the yearsBack field — do NOT rely on the default.',
         },
         endDate: {
           type: 'string',
-          description: 'End date in YYYY-MM-DD format',
+          description: 'End date in YYYY-MM-DD format. Defaults to today.',
+        },
+        yearsBack: {
+          type: 'number',
+          description: 'Convenience: how many years back to search from today. Use this when the user says "last N years", "10 year lookback", "aging installations 10-15 years old", etc. For an "aging installations 10-15 years old" query, pass yearsBack: 15 and the tool will search the full 15-year window. Mutually exclusive with startDate — startDate wins if both are provided.',
         },
         maxResults: {
           type: 'number',
@@ -139,7 +143,26 @@ function classifySearchError(err: any): string {
 
 const handlers: Record<string, ToolHandler> = {
   search_permits: async (input, context) => {
-    const startDate = input.startDate || new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString().split('T')[0];
+    // Date resolution: explicit startDate > yearsBack > 1-year default.
+    // The 1-year default is a last resort and we log a warning so future
+    // "only 1 result" triage has a trail.
+    let startDate: string;
+    let dateSource: 'startDate' | 'yearsBack' | 'default';
+    if (input.startDate) {
+      startDate = input.startDate;
+      dateSource = 'startDate';
+    } else if (typeof input.yearsBack === 'number' && input.yearsBack > 0) {
+      const years = Math.min(Math.max(1, Math.floor(input.yearsBack)), 30);
+      startDate = new Date(new Date().setFullYear(new Date().getFullYear() - years)).toISOString().split('T')[0];
+      dateSource = 'yearsBack';
+    } else {
+      startDate = new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString().split('T')[0];
+      dateSource = 'default';
+      logger.warn(
+        { city: input.city, permitType: input.permitType },
+        'search_permits called with no startDate and no yearsBack — defaulting to last 1 year. If the user intent was a longer lookback, this search will miss results.'
+      );
+    }
     const endDate = input.endDate || new Date().toISOString().split('T')[0];
     const maxResults = Math.min(input.limit || input.maxResults || 50, 500);
 
@@ -230,8 +253,16 @@ const handlers: Record<string, ToolHandler> = {
 
     // Tier ladder mirrors search_homeowners — never dead-end with a red
     // "No Permits Found" card. Drop tag → widen window → county → statewide.
-    // Stop at first tier returning ≥ 1 contractor; emit JOB_COMPLETED with
-    // a `widening` envelope so the UI shows "Filters widened: …".
+    // Stop at first tier returning ≥ MIN_TIER_RESULTS contractors; emit
+    // JOB_COMPLETED with a `widening` envelope so the UI shows
+    // "Filters widened: …".
+    //
+    // Threshold is derived from the caller's maxResults so the ladder
+    // stops as soon as the user's request is satisfied. Floor at 3 to
+    // avoid stopping on a single spurious result from a thin tier; cap
+    // at 5 so large asks (e.g. 500) don't chew through every tier when
+    // a mid tier already has plenty.
+    const MIN_TIER_RESULTS = Math.max(3, Math.min(5, maxResults));
     const runSearch = async () => {
       await prisma.permitSearch.update({
         where: { id: search.id },
@@ -327,6 +358,7 @@ const handlers: Record<string, ToolHandler> = {
       });
 
       let appliedTier: Tier | null = null;
+      let appliedTierResult: any = null;
       let result: any = null;
 
       for (const tier of tiers) {
@@ -368,10 +400,23 @@ const handlers: Record<string, ToolHandler> = {
         }
 
         if (result?.wasCancelled) break;
-        if (result && result.totalScraped >= 1) {
+        if (result && result.totalScraped >= MIN_TIER_RESULTS) {
           appliedTier = tier;
           break;
         }
+        // Keep the best-so-far tier as a fallback in case no tier hits the
+        // MIN_TIER_RESULTS bar — we still want to return any real contractors
+        // we found, just not stop the ladder too early on a thin tier.
+        if (result && result.totalScraped > 0 && (!appliedTier || (appliedTierResult?.totalScraped ?? 0) < result.totalScraped)) {
+          appliedTier = tier;
+          appliedTierResult = result;
+        }
+      }
+
+      // If no tier hit MIN_TIER_RESULTS, the best thin tier (if any) becomes
+      // the final result — better to return 2 real installers than 0.
+      if (appliedTier && appliedTierResult && (result?.totalScraped ?? 0) < MIN_TIER_RESULTS) {
+        result = appliedTierResult;
       }
 
       // ── Cancellation handling ──────────────────────────────────────
@@ -430,11 +475,31 @@ const handlers: Record<string, ToolHandler> = {
             reason: `No contractors filed "${input.permitType}" or any other permits in ${cityName}${stateAbbr ? ', ' + stateAbbr : ''} or surrounding ${stateAbbr || 'state'} ZIPs in the searched windows.`,
           };
 
+      // ── Diagnostic funnel (rawCount → imported, with drop buckets) ──
+      // Makes "why did we get only N results?" answerable from the event
+      // payload alone instead of needing a log dive.
+      const diagnostics = {
+        rawCount: result?.totalScraped ?? 0,
+        imported: result?.totalImported ?? 0,
+        duplicates: result?.duplicates ?? 0,
+        filtered: result?.filtered ?? 0,
+        appliedTier: appliedTier?.id ?? null,
+        // All contractor tiers (A-E) make live Shovels API calls. There is
+        // no DB-fallback tier for contractor search (unlike homeowner). So
+        // the data source is always 'shovels_live' unless the whole ladder
+        // returned nothing.
+        dataSource: (appliedTier ? 'shovels_live' : 'none') as 'shovels_live' | 'none',
+        dateSource,
+        startDate,
+        endDate,
+      };
+      logger.info({ searchId: search.id, ...diagnostics }, 'Permit search funnel');
+
       // ── Zero-result branch (all tiers exhausted) ───────────────────
       if (!appliedTier || !result || result.totalScraped === 0) {
         await prisma.permitSearch.update({
           where: { id: search.id },
-          data: { status: 'COMPLETED', totalFound: 0 },
+          data: { status: 'COMPLETED', totalFound: 0, diagnostics: diagnostics as any },
         });
         const eventPayload = {
           jobId: search.id,
@@ -445,6 +510,7 @@ const handlers: Record<string, ToolHandler> = {
             permitType: input.permitType,
             city: cityName,
             widening,
+            diagnostics,
             message: widening.reason,
           },
         };
@@ -456,9 +522,12 @@ const handlers: Record<string, ToolHandler> = {
       }
 
       // ── Found something — proceed with enrichment ──────────────────
+      // Persist diagnostics so buildSheetForSearch can include them in the
+      // final JOB_COMPLETED payload (lets the UI show "Found X of Y — Z
+      // filtered out" on successful searches, not just zero-result ones).
       await prisma.permitSearch.update({
         where: { id: search.id },
-        data: { status: 'ENRICHING', totalFound: result.totalImported },
+        data: { status: 'ENRICHING', totalFound: result.totalImported, diagnostics: diagnostics as any },
       });
 
       if (search.conversationId) {

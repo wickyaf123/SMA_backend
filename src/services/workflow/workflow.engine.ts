@@ -14,6 +14,7 @@ import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { executeTool } from '../chat/tools/index';
 import { workflowQueue } from '../../jobs/queues';
+import { logIssue } from '../observability/issue-log.service';
 import {
   emitWorkflowStarted,
   emitWorkflowStepStarted,
@@ -86,6 +87,17 @@ class WorkflowEngine {
    */
   async createWorkflow(data: CreateWorkflowInput): Promise<any> {
     logger.info({ name: data.name, stepCount: data.steps.length }, 'Creating workflow');
+
+    if (!data.conversationId) {
+      // Events fired for a conversationId-less workflow never reach a UI.
+      // Log as an IssueEvent so the admin dashboard can surface this.
+      void logIssue({
+        category: 'WORKFLOW_MISSING_CONVERSATION_ID',
+        severity: 'ERROR',
+        message: `Workflow "${data.name}" created without conversationId — UI will never render progress`,
+        payload: { name: data.name, stepCount: data.steps.length },
+      });
+    }
 
     // Validate plan
     if (!data.steps || data.steps.length === 0) {

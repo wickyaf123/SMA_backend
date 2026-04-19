@@ -11,6 +11,7 @@ import { emitJobToConversation, WSEventType } from '../../config/websocket';
 import { logger } from '../../utils/logger';
 import type { ClayEnrichPayload } from '../../integrations/clay/types';
 import { lookupGeoId } from '../../data/geo-ids';
+import { logIssue } from '../observability/issue-log.service';
 
 export interface PermitPipelineParams {
   permitType: string;
@@ -133,6 +134,68 @@ export class PermitPipelineService {
       return search.id;
     }
 
+    // Zero results but NO errors — Shovels returned an empty set cleanly.
+    // Previously this path fell through to enrichment, leaving the search
+    // stuck at ENRICHING forever and the UI showing a frozen progress card.
+    // Now we short-circuit with a JOB_COMPLETED carrying a diagnostics
+    // envelope so the frontend can render a "no data" card and Jerry can
+    // explain why. Logged as SILENT_EMPTY_RESULT so the admin dashboard
+    // surfaces the pattern.
+    if (result.totalScraped === 0) {
+      const diagnostics = {
+        rawCount: 0,
+        imported: 0,
+        duplicates: result.duplicates ?? 0,
+        filtered: result.filtered ?? 0,
+        reason: (result as any).filtered > 0
+          ? 'Shovels returned permits but relevance filter rejected all of them'
+          : 'No permits returned from Shovels for this trade/city/window',
+        permitType: params.permitType,
+        city: params.city,
+        startDate: params.startDate,
+        endDate: params.endDate,
+      };
+
+      await prisma.permitSearch.update({
+        where: { id: search.id },
+        data: { status: 'COMPLETED', totalFound: 0 },
+      });
+
+      void logIssue({
+        category: 'SILENT_EMPTY_RESULT',
+        severity: 'INFO',
+        message: `Permit search returned 0 results (${params.permitType} in ${params.city})`,
+        conversationId: search.conversationId ?? null,
+        jobId: search.id,
+        payload: diagnostics,
+      });
+
+      realtimeEmitter.emitJobEvent({
+        jobId: search.id,
+        jobType: 'permit:search',
+        status: 'completed',
+        result: { total: 0, diagnostics },
+      });
+
+      if (search.conversationId) {
+        emitJobToConversation(search.conversationId, WSEventType.JOB_COMPLETED, {
+          jobId: search.id,
+          jobType: 'permit:search',
+          status: 'completed',
+          result: {
+            total: 0,
+            enriched: 0,
+            incomplete: 0,
+            permitType: params.permitType,
+            city: params.city,
+            diagnostics,
+          },
+        });
+      }
+
+      return search.id;
+    }
+
     // Atomically link contacts and update status to prevent race conditions
     await prisma.$transaction(async (tx) => {
       await tx.permitSearch.update({
@@ -233,15 +296,33 @@ export class PermitPipelineService {
   }
 
   async handleClayCallback(contactId: string, enrichedData: any): Promise<void> {
-    const updates: any = { clayEnrichedAt: new Date() };
-
-    if (enrichedData.email) updates.email = enrichedData.email;
-    if (enrichedData.phone) updates.phone = enrichedData.phone;
-
     const existing = await prisma.contact.findUnique({
       where: { id: contactId },
       select: { email: true, permitSearchId: true },
     });
+
+    // Guard against late-arriving webhooks for searches the user has already
+    // cancelled or that failed. Without this guard, Clay could stamp
+    // `clayEnrichedAt` onto contacts belonging to a terminal-state search
+    // and re-trigger checkAndFinalizeSearch, corrupting the audit trail.
+    if (existing?.permitSearchId) {
+      const search = await prisma.permitSearch.findUnique({
+        where: { id: existing.permitSearchId },
+        select: { status: true },
+      });
+      if (!search || ['CANCELLED', 'FAILED'].includes(search.status)) {
+        logger.info(
+          { contactId, permitSearchId: existing.permitSearchId, status: search?.status ?? 'missing' },
+          'Clay callback ignored — parent permit search is in a terminal state'
+        );
+        return;
+      }
+    }
+
+    const updates: any = { clayEnrichedAt: new Date() };
+
+    if (enrichedData.email) updates.email = enrichedData.email;
+    if (enrichedData.phone) updates.phone = enrichedData.phone;
 
     const hasEmail = enrichedData.email || existing?.email;
     updates.clayEnrichmentStatus = hasEmail ? 'ENRICHED' : 'INCOMPLETE';
@@ -254,6 +335,17 @@ export class PermitPipelineService {
   }
 
   async checkAndFinalizeSearch(permitSearchId: string): Promise<void> {
+    // Don't finalize a search that the user cancelled or that failed —
+    // downstream Clay webhooks can still land on individual contacts long
+    // after the parent search has been marked terminal. buildSheetForSearch
+    // already short-circuits on READY_FOR_REVIEW/COMPLETED, extend the same
+    // protection to CANCELLED and FAILED so we never re-enter the pipeline.
+    const search = await prisma.permitSearch.findUnique({
+      where: { id: permitSearchId },
+      select: { status: true },
+    });
+    if (!search || ['CANCELLED', 'FAILED'].includes(search.status)) return;
+
     const pending = await prisma.contact.count({
       where: { permitSearchId, clayEnrichmentStatus: 'PENDING' },
     });
@@ -344,6 +436,9 @@ export class PermitPipelineService {
       permitType: search.permitType,
       city: search.city,
       contacts: contactPreview,
+      // Carry forward the diagnostics captured during the tier ladder so the
+      // UI can render "Found X of Y — Z filtered out" on the success card.
+      ...(search.diagnostics ? { diagnostics: search.diagnostics } : {}),
     };
 
     realtimeEmitter.emitJobEvent({

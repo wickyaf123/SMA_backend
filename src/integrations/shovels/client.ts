@@ -48,12 +48,19 @@ export class ShovelsClient {
     this.dailyCreditLimit = limit;
   }
 
-  /** Reset the per-run call counter (call at start of each job). */
+  /**
+   * Deprecated — kept as a no-op so legacy callers compile. Previously this
+   * reset a global counter, but callers are expected to concurrently run
+   * searches and the global reset corrupted the delta accounting for other
+   * in-flight jobs. Per-job accounting is now done via
+   * `const before = runCallCount; ...; const delta = runCallCount - before;`
+   * which is race-safe because the counter is monotonically increasing.
+   */
   resetRunCounter(): void {
-    this._runCallCount = 0;
+    // intentional no-op
   }
 
-  /** How many API calls this run has made. */
+  /** Monotonically increasing API-call counter across the process lifetime. */
   get runCallCount(): number {
     return this._runCallCount;
   }

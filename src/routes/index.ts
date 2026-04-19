@@ -20,6 +20,7 @@ import homeownerRoutes from './homeowner.routes';
 import connectionRoutes from './connection.routes';
 import chatRoutes from './chat.routes';
 import chatHealthRoutes from './chat-health.routes';
+import adminRoutes from './admin.routes';
 
 const router = Router();
 
@@ -81,6 +82,9 @@ router.use('/api/v1/homeowners', authMiddleware, homeownerRoutes);
 
 // Contractor-Homeowner Connections
 router.use('/api/v1/connections', authMiddleware, connectionRoutes);
+
+// Admin-only observability (gated by ADMIN_API_KEY header, not JWT).
+router.use('/api/v1/admin', adminRoutes);
 
 // Jerry pipeline observability / health — must come BEFORE /api/v1/chat
 // so the more-specific prefix wins on route matching.

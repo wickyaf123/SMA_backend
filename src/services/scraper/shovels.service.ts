@@ -51,19 +51,28 @@ const JOB_SIGNAL_TTL = 3600; // 1 hour
 // Local write-through cache for fast synchronous reads
 const localCache = new Map<string, 'paused' | 'cancelled'>();
 
+// Redis ops are fire-and-forget but we surface failures so ops can see when
+// the local cache and Redis diverge. Silent catches hid a class of bugs
+// where a cancelled job kept running because Redis was unreachable.
 export function pauseJob(jobId: string): void {
   localCache.set(jobId, 'paused');
-  redis.set(`${JOB_SIGNAL_PREFIX}${jobId}`, 'paused', 'EX', JOB_SIGNAL_TTL).catch(() => {});
+  redis.set(`${JOB_SIGNAL_PREFIX}${jobId}`, 'paused', 'EX', JOB_SIGNAL_TTL).catch((err) => {
+    logger.warn({ jobId, err: err?.message }, 'Failed to persist pause signal to Redis — local cache only');
+  });
 }
 
 export function resumeJob(jobId: string): void {
   localCache.delete(jobId);
-  redis.del(`${JOB_SIGNAL_PREFIX}${jobId}`).catch(() => {});
+  redis.del(`${JOB_SIGNAL_PREFIX}${jobId}`).catch((err) => {
+    logger.warn({ jobId, err: err?.message }, 'Failed to clear resume signal in Redis — local cache cleared');
+  });
 }
 
 export function cancelJob(jobId: string): void {
   localCache.set(jobId, 'cancelled');
-  redis.set(`${JOB_SIGNAL_PREFIX}${jobId}`, 'cancelled', 'EX', JOB_SIGNAL_TTL).catch(() => {});
+  redis.set(`${JOB_SIGNAL_PREFIX}${jobId}`, 'cancelled', 'EX', JOB_SIGNAL_TTL).catch((err) => {
+    logger.warn({ jobId, err: err?.message }, 'Failed to persist cancel signal to Redis — local cache only');
+  });
 }
 
 export function getJobSignal(jobId: string): 'paused' | 'cancelled' | undefined {
@@ -72,7 +81,9 @@ export function getJobSignal(jobId: string): 'paused' | 'cancelled' | undefined 
 
 export function clearJobSignal(jobId: string): void {
   localCache.delete(jobId);
-  redis.del(`${JOB_SIGNAL_PREFIX}${jobId}`).catch(() => {});
+  redis.del(`${JOB_SIGNAL_PREFIX}${jobId}`).catch((err) => {
+    logger.warn({ jobId, err: err?.message }, 'Failed to clear job signal in Redis — state may diverge');
+  });
 }
 
 /** Restore signals from Redis on startup (called once) */
@@ -349,23 +360,81 @@ export class ShovelsScraperService {
     throw lastErr;
   }
 
-  private permitSearchUserCache = new Map<string, string | null>();
+  // Static so the cache survives if someone accidentally `new`s this class
+  // instead of using the singleton export.
+  private static readonly permitSearchUserCache = new Map<string, string | null>();
+
+  // Serializes find-or-create for a given (name, state) so two concurrent
+  // importContact() calls for the same contractor share a single DB round
+  // trip and can't both create duplicate Company rows. Process-scoped.
+  private static readonly companyInFlight = new Map<string, Promise<any>>();
+
+  private async resolveCompanyForImport(normalized: any): Promise<any> {
+    const key = `${(normalized.companyName || '').toLowerCase()}|${(normalized.companyState || '').toLowerCase()}`;
+    const inflight = ShovelsScraperService.companyInFlight.get(key);
+    if (inflight) return inflight;
+
+    const promise = (async () => {
+      let company = await prisma.company.findFirst({
+        where: {
+          name: normalized.companyName,
+          ...(normalized.companyState ? { state: normalized.companyState } : {}),
+        },
+      });
+
+      if (!company) {
+        company = await prisma.company.create({
+          data: {
+            name: normalized.companyName,
+            city: normalized.companyCity,
+            state: normalized.companyState,
+            revenue: normalized.companyRevenue,
+            dataSources: ['SHOVELS'],
+          },
+        });
+      } else if (normalized.companyRevenue && !company.revenue) {
+        await prisma.company.update({
+          where: { id: company.id },
+          data: { revenue: normalized.companyRevenue },
+        });
+      }
+      return company;
+    })();
+
+    ShovelsScraperService.companyInFlight.set(key, promise);
+    try {
+      return await promise;
+    } finally {
+      ShovelsScraperService.companyInFlight.delete(key);
+    }
+  }
 
   private async resolvePermitSearchUserId(permitSearchId: string): Promise<string | null> {
-    if (this.permitSearchUserCache.has(permitSearchId)) {
-      return this.permitSearchUserCache.get(permitSearchId)!;
+    const cache = ShovelsScraperService.permitSearchUserCache;
+    if (cache.has(permitSearchId)) {
+      return cache.get(permitSearchId)!;
     }
     const search = await prisma.permitSearch.findUnique({
       where: { id: permitSearchId },
       select: { userId: true },
     });
     const userId = search?.userId || null;
-    this.permitSearchUserCache.set(permitSearchId, userId);
+    cache.set(permitSearchId, userId);
     return userId;
   }
 
   private async importContact(normalized: any, permitSearchId?: string): Promise<'imported' | 'duplicate' | 'skipped'> {
-    if (!normalized.email && !normalized.phone) return 'skipped';
+    // Previously contacts with no email AND no phone were hard-skipped. That
+    // silently dropped most older permit records (common on 10–15yr lookbacks
+    // where Shovels never had contact data). Soft-import them instead and tag
+    // them `enrichment:needed` so Clay/Hunter can fill in email downstream.
+    const hasContact = !!normalized.email || !!normalized.phone;
+    const needsEnrichment = !hasContact;
+
+    // Require at least *some* identifier so dedup has something to hang on.
+    if (!hasContact && !normalized.shovelsContractorId && !normalized.shovelsEmployeeId) {
+      return 'skipped';
+    }
 
     const ownerUserId = permitSearchId
       ? await this.resolvePermitSearchUserId(permitSearchId)
@@ -378,11 +447,22 @@ export class ShovelsScraperService {
         existing = await prisma.contact.findUnique({
           where: { email: normalized.email },
         });
-      } else {
+      } else if (normalized.phone) {
         existing = await prisma.contact.findFirst({
           where: {
             phone: normalized.phone,
             shovelsContractorId: normalized.shovelsContractorId,
+          },
+        });
+      } else {
+        // No email, no phone — dedup on Shovels ids so we don't create a new
+        // row every time the same contractor's permits cycle through.
+        existing = await prisma.contact.findFirst({
+          where: {
+            shovelsContractorId: normalized.shovelsContractorId,
+            ...(normalized.shovelsEmployeeId
+              ? { shovelsEmployeeId: normalized.shovelsEmployeeId }
+              : {}),
           },
         });
       }
@@ -412,29 +492,13 @@ export class ShovelsScraperService {
         return 'duplicate';
       }
 
-      let company = await prisma.company.findFirst({
-        where: {
-          name: normalized.companyName,
-          ...(normalized.companyState ? { state: normalized.companyState } : {}),
-        },
-      });
-
-      if (!company) {
-        company = await prisma.company.create({
-          data: {
-            name: normalized.companyName,
-            city: normalized.companyCity,
-            state: normalized.companyState,
-            revenue: normalized.companyRevenue,
-            dataSources: ['SHOVELS'],
-          },
-        });
-      } else if (normalized.companyRevenue && !company.revenue) {
-        await prisma.company.update({
-          where: { id: company.id },
-          data: { revenue: normalized.companyRevenue },
-        });
-      }
+      // Two concurrent permit searches for the same contractor used to both
+      // miss findFirst and then both create, producing duplicate Company rows.
+      // The schema has no @@unique([name, state]) so Prisma upsert isn't
+      // available; instead we serialize lookups through a process-level
+      // in-flight map keyed by (name, state). Correct for single-node deploy;
+      // for multi-node we'd need a DB-level unique constraint + migration.
+      let company = await this.resolveCompanyForImport(normalized);
 
       await prisma.contact.create({
         data: {
@@ -480,6 +544,7 @@ export class ShovelsScraperService {
           dataSources: ['SHOVELS'],
           tags: [
             ...(normalized.email ? [] : ['no_individual_contact']),
+            ...(needsEnrichment ? ['enrichment:needed'] : []),
             ...(normalized.permitType ? [`permit:${normalized.permitType}`] : []),
           ],
           status: 'NEW',

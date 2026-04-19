@@ -113,8 +113,12 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
       logger.debug({ socketId: socket.id, room }, 'Client unsubscribed from room');
     });
 
-    // Handle chat room subscription
-    socket.on('chat:join', async (conversationId: string) => {
+    // Handle chat room subscription. Accepts an optional ack callback so the
+    // client can wait for replay to finish before firing subsequent actions
+    // (e.g. starting a workflow). Without the ack, the client may POST a
+    // workflow before the room join finishes on the server, and the
+    // workflow:started event lands in a room with zero subscribers.
+    socket.on('chat:join', async (conversationId: string, ack?: (result: { joined: boolean; replayed: number; error?: string }) => void) => {
       const room = `chat:${conversationId}`;
       socket.join(room);
       if (!socketConversations.has(socket.id)) {
@@ -122,6 +126,8 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
       }
       socketConversations.get(socket.id)!.add(conversationId);
       logger.debug({ socketId: socket.id, room }, 'Client joined chat room');
+
+      let replayed = 0;
 
       // Send active/recent job states so cards persist across page reloads
       try {
@@ -152,6 +158,7 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
 
           socket.emit(event, {
             jobId: search.id,
+            conversationId,
             jobType: 'permit:search',
             status: isInProgress ? 'started' : isCancelled ? 'cancelled' : search.status === 'FAILED' ? 'failed' : 'completed',
             isReplay: true,
@@ -165,6 +172,7 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
             },
             timestamp: new Date().toISOString(),
           });
+          replayed++;
         }
 
         if (activeSearches.length > 0) {
@@ -175,6 +183,90 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
         }
       } catch (err) {
         logger.error({ err, conversationId }, 'Failed to query active searches on chat:join');
+      }
+
+      // Replay in-flight and recently-completed workflows. Without this,
+      // workflows whose `workflow:started` event fired before chat:join
+      // completed (e.g. user clicks a preset immediately on page load)
+      // never render in the UI — root cause of the "workflow starts but
+      // no UI visible" bug.
+      try {
+        const activeWorkflows = await prisma.workflow.findMany({
+          where: {
+            conversationId,
+            OR: [
+              { status: { in: ['PENDING', 'RUNNING', 'PAUSED'] } },
+              {
+                status: { in: ['COMPLETED', 'FAILED', 'CANCELLED'] },
+                updatedAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
+              },
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+          include: { steps: { orderBy: { order: 'asc' } } },
+        });
+
+        for (const wf of activeWorkflows) {
+          const isActive = ['PENDING', 'RUNNING', 'PAUSED'].includes(wf.status);
+          const payload = {
+            workflowId: wf.id,
+            conversationId,
+            name: wf.name,
+            totalSteps: wf.totalSteps,
+            steps: wf.steps.map((s) => ({
+              order: s.order,
+              name: s.name,
+              action: s.action,
+              status: (s.status as string).toLowerCase(),
+              progress: s.progress ?? undefined,
+              progressTotal: s.progressTotal ?? undefined,
+              error: s.error ?? undefined,
+            })),
+            startedAt: wf.startedAt?.toISOString(),
+            isReplay: true,
+          };
+
+          if (isActive) {
+            socket.emit(WSEventType.WORKFLOW_STARTED, { ...payload, timestamp: new Date().toISOString() });
+          } else if (wf.status === 'COMPLETED') {
+            socket.emit(WSEventType.WORKFLOW_STARTED, { ...payload, timestamp: new Date().toISOString() });
+            socket.emit(WSEventType.WORKFLOW_COMPLETED, {
+              workflowId: wf.id,
+              conversationId,
+              completedSteps: wf.completedSteps,
+              totalSteps: wf.totalSteps,
+              completedAt: wf.completedAt?.toISOString() ?? new Date().toISOString(),
+              isReplay: true,
+              timestamp: new Date().toISOString(),
+            });
+          } else {
+            // FAILED or CANCELLED
+            socket.emit(WSEventType.WORKFLOW_STARTED, { ...payload, timestamp: new Date().toISOString() });
+            socket.emit(WSEventType.WORKFLOW_FAILED, {
+              workflowId: wf.id,
+              conversationId,
+              error: wf.status === 'CANCELLED' ? 'cancelled' : 'failed',
+              isReplay: true,
+              timestamp: new Date().toISOString(),
+            });
+          }
+          replayed++;
+        }
+
+        if (activeWorkflows.length > 0) {
+          logger.debug(
+            { socketId: socket.id, conversationId, count: activeWorkflows.length },
+            'Replayed active workflow states on chat:join'
+          );
+        }
+      } catch (err) {
+        logger.error({ err, conversationId }, 'Failed to replay workflows on chat:join');
+      }
+
+      try {
+        ack?.({ joined: true, replayed });
+      } catch (err) {
+        logger.warn({ err }, 'chat:join ack callback threw');
       }
     });
 
@@ -206,6 +298,7 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
       const room = `chat:${data.conversationId}`;
       io?.to(room).emit(WSEventType.JOB_PAUSED, {
         jobId: data.jobId,
+        conversationId: data.conversationId,
         timestamp: new Date().toISOString(),
       });
     });
@@ -217,6 +310,7 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
       const room = `chat:${data.conversationId}`;
       io?.to(room).emit(WSEventType.JOB_RESUMED, {
         jobId: data.jobId,
+        conversationId: data.conversationId,
         timestamp: new Date().toISOString(),
       });
     });
@@ -253,6 +347,7 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
         jobId: data.jobId,
         jobType: data.jobType || 'unknown',
         status: 'cancelled',
+        conversationId: data.conversationId,
         result: { message: 'Job cancelled by user' },
         timestamp: new Date().toISOString(),
       });
@@ -351,7 +446,11 @@ export function emitJobToConversation(
   }
 ): void {
   if (conversationId) {
-    emitToRoom(`chat:${conversationId}`, event, data);
+    // Stamp conversationId onto the payload. Without this, the frontend's
+    // acceptJobEvent filter drops brand-new jobs (no convId AND jobId not
+    // yet in activeJobsRef → rejected). Root cause of "scraper job runs
+    // but no card appears in the chat" reports.
+    emitToRoom(`chat:${conversationId}`, event, { ...data, conversationId });
   }
 }
 

@@ -42,6 +42,41 @@ const INDUSTRY_KEYWORDS: Record<string, string[]> = {
   general:    ['general contractor', 'general construction', 'remodel'],
 };
 
+// Utility / grid operators that commonly appear in solar / electrical permit
+// feeds (interconnection paperwork) but are NOT installers. Hard-reject for
+// solar and battery searches regardless of tag_tally.
+const UTILITY_BLOCKLIST: string[] = [
+  'florida power',
+  'power & light',
+  'light & power',
+  'duke energy',
+  'pacific gas',
+  'pg&e',
+  'pgne',
+  'con edison',
+  'consolidated edison',
+  'national grid',
+  'municipal utilities',
+  'municipal utility',
+  'electric cooperative',
+  'electric co-op',
+  'electric coop',
+  'rural electric',
+  'southern california edison',
+  'xcel energy',
+  'dominion energy',
+  'ameren',
+  'entergy',
+  'nv energy',
+  'eversource',
+  'tva',
+  'tennessee valley authority',
+];
+
+// Searches where utility-company contamination is common enough to warrant
+// the hard blocklist above.
+const UTILITY_SENSITIVE_TAGS = new Set(['solar', 'battery', 'electrical']);
+
 /**
  * Score a contractor's relevance to the searched permit type.
  *
@@ -54,6 +89,23 @@ export function scoreContractorRelevance(
   const searchTag = searchedPermitType.toLowerCase().trim();
   let score = 0;
   const reasons: string[] = [];
+
+  // ── 0. Utility / grid-operator blocklist ───────────────────────
+  // Hard-reject utilities when searching for install-type permits — FPL,
+  // Duke, PG&E etc. routinely show up in solar feeds via interconnection
+  // paperwork but are never the installer.
+  const rawName = (contractor.business_name || contractor.name || '').toLowerCase();
+  if (UTILITY_SENSITIVE_TAGS.has(searchTag)) {
+    const blockedMatch = UTILITY_BLOCKLIST.find((kw) => rawName.includes(kw));
+    if (blockedMatch) {
+      return {
+        relevant: false,
+        score: 0,
+        reason: `"${contractor.business_name || contractor.name}" matches utility blocklist ("${blockedMatch}") — not an installer`,
+        tagRatio: null,
+      };
+    }
+  }
 
   // ── 1. Tag-tally ratio (0-50 pts) ──────────────────────────────
   let tagRatio: number | null = null;
@@ -93,13 +145,22 @@ export function scoreContractorRelevance(
     kw => industry.includes(kw) || classification.includes(kw)
   );
 
+  let mismatchedIndustry: string | null = null;
   if (nameMatchesSearchType) {
     score += 30;
   } else if (industryMatchesSearchType) {
     score += 25;
   } else {
-    const mismatchedIndustry = detectIndustryFromName(name, searchTag);
+    mismatchedIndustry = detectIndustryFromName(name, searchTag);
     if (mismatchedIndustry) {
+      // Previously this branch silently awarded 0 pts to name and relied on
+      // the classification bonus below to quietly push the contractor past
+      // the threshold anyway (how FPL slipped through). For solar/battery
+      // searches a detected cross-industry name is a strong negative signal;
+      // actively penalize instead of staying neutral.
+      if (UTILITY_SENSITIVE_TAGS.has(searchTag)) {
+        score -= 25;
+      }
       reasons.push(
         `business name "${contractor.business_name || contractor.name}" indicates "${mismatchedIndustry}", not "${searchTag}"`
       );

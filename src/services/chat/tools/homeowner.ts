@@ -672,6 +672,23 @@ const handlers: Record<string, ToolHandler> = {
           }
         } catch (fallbackErr: any) {
           logger.error({ err: fallbackErr.message }, 'Homeowner DB-fallback failed');
+          try {
+            const { logIssue } = await import('../../../services/observability/issue-log.service');
+            void logIssue({
+              category: 'HOMEOWNER_FALLBACK_FAILED',
+              severity: 'ERROR',
+              message: `Homeowner DB-fallback failed: ${fallbackErr?.message ?? 'unknown'}`,
+              conversationId: context?.conversationId ?? null,
+              jobId: search?.id ?? null,
+              payload: {
+                city: input.city,
+                permitTypes: input.permitTypes,
+                error: fallbackErr?.message ?? String(fallbackErr),
+              },
+            });
+          } catch {
+            // logIssue should never block the fallback path
+          }
         }
       }
 
@@ -773,6 +790,34 @@ const handlers: Record<string, ToolHandler> = {
         };
       });
 
+      // Funnel diagnostics so the user can see WHY a 0-result search failed
+      // (e.g. "Shovels had 8 properties, 0 matched tag filter" or "All tiers
+      // exhausted — no data in Miami for 2019-2021"). Mirrors the structure
+      // we use for contractor searches.
+      //
+      // dataSource tells the UI whether these records came from a fresh
+      // Shovels API scrape (Tiers A-E) or a DB fallback (Tier F — rare).
+      // Prevents the "did we actually scrape?" ambiguity the user flagged.
+      const dataSource: 'shovels_live' | 'db_fallback' | 'none' = !appliedTier
+        ? 'none'
+        : appliedTier.id === 'F' ? 'db_fallback' : 'shovels_live';
+
+      const diagnostics = {
+        totalFound: residents.length,
+        permitOnlyCount: residents.filter((r: any) => r.isPermitOnlyLead).length,
+        enrichedCount: residents.filter((r: any) => r.realieEnriched).length,
+        appliedTier: appliedTier?.id ?? null,
+        tiersTried: appliedTier?.id ?? 'A-F (all exhausted)',
+        dataSource,
+        reason: widening.reason,
+        originalQuery: {
+          city: input.city,
+          permitTypes: input.permitTypes,
+          propertyValueRange: userValueRange,
+          yearsBack: userMaxYearsBack,
+        },
+      };
+
       const completedPayload = {
         total: residents.length,
         withEmail: residents.filter((r: any) => r.email).length,
@@ -782,6 +827,7 @@ const handlers: Record<string, ToolHandler> = {
         trade: input.trade,
         city: input.city,
         widening,
+        diagnostics,
         homeowners: sampleHomeowners,
       };
 
