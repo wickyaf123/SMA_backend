@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '../../config/database';
 import { config } from '../../config/index';
 import { logger } from '../../utils/logger';
-import { NotFoundError, RateLimitError } from '../../utils/errors';
+import { NotFoundError, RateLimitError, ValidationError } from '../../utils/errors';
 import { runLangGraphTurn, resumeLangGraphConfirmation } from './agent/engine';
 
 /** Classify protocol prefixes so the Prisma message row has accurate metadata. */
@@ -28,28 +28,26 @@ export class ChatService {
     return this.client;
   }
 
-  async createConversation(title?: string, userId?: string): Promise<any> {
+  async createConversation(title: string | undefined, userId: string): Promise<any> {
+    if (!userId) {
+      throw new ValidationError('userId is required to create a conversation');
+    }
     const conversation = await prisma.conversation.create({
       data: {
         title: title || 'New Chat',
-        ...(userId && { userId }),
+        userId,
       },
     });
     logger.info({ conversationId: conversation.id, userId }, 'Created new conversation');
     return conversation;
   }
 
-  async listConversations(userId?: string): Promise<any[]> {
-    const where: any = {};
-    if (userId) {
-      where.OR = [
-        { userId },
-        { userId: null },
-      ];
+  async listConversations(userId: string): Promise<any[]> {
+    if (!userId) {
+      throw new ValidationError('userId is required to list conversations');
     }
-
     return prisma.conversation.findMany({
-      where,
+      where: { userId },
       orderBy: { updatedAt: 'desc' },
       include: {
         messages: {
@@ -61,7 +59,10 @@ export class ChatService {
     });
   }
 
-  async getConversation(id: string, userId?: string): Promise<any> {
+  async getConversation(id: string, userId: string): Promise<any> {
+    if (!userId) {
+      throw new ValidationError('userId is required to load a conversation');
+    }
     const conversation = await prisma.conversation.findUnique({
       where: { id },
       include: {
@@ -70,36 +71,29 @@ export class ChatService {
         },
       },
     });
-    if (!conversation) {
-      throw new NotFoundError('Conversation not found');
-    }
-    if (userId && conversation.userId && conversation.userId !== userId) {
-      throw new NotFoundError('Conversation not found');
-    }
-    // Adopt orphaned conversations: assign to the requesting user
-    if (userId && !conversation.userId) {
-      await prisma.conversation.update({
-        where: { id },
-        data: { userId },
-      });
+    if (!conversation || conversation.userId !== userId) {
+      throw new NotFoundError('Conversation', id);
     }
     return conversation;
   }
 
-  async deleteConversation(id: string, userId?: string): Promise<void> {
-    const where: any = { id };
-    if (userId) {
-      where.OR = [{ userId }, { userId: null }];
+  async deleteConversation(id: string, userId: string): Promise<void> {
+    if (!userId) {
+      throw new ValidationError('userId is required to delete a conversation');
     }
-
-    const result = await prisma.conversation.deleteMany({ where });
+    const result = await prisma.conversation.deleteMany({
+      where: { id, userId },
+    });
     if (result.count === 0) {
       throw new NotFoundError('Conversation', id);
     }
-    logger.info({ conversationId: id }, 'Deleted conversation');
+    logger.info({ conversationId: id, userId }, 'Deleted conversation');
   }
 
-  async searchConversations(query: string, userId?: string): Promise<any[]> {
+  async searchConversations(query: string, userId: string): Promise<any[]> {
+    if (!userId) {
+      throw new ValidationError('userId is required to search conversations');
+    }
     if (!query || query.trim().length === 0) return [];
 
     const messageWhere: any = {
@@ -108,12 +102,8 @@ export class ChatService {
         mode: 'insensitive',
       },
       role: { in: ['user', 'assistant'] },
+      conversation: { userId },
     };
-    if (userId) {
-      messageWhere.conversation = {
-        OR: [{ userId }, { userId: null }],
-      };
-    }
 
     const results = await prisma.message.findMany({
       where: messageWhere,

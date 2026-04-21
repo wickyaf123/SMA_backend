@@ -6,12 +6,21 @@ import { sendSuccess, sendError } from '../utils/response';
 import { prisma } from '../config/database';
 import { getPresetById } from '../services/workflow/workflow-presets';
 import { workflowEngine } from '../services/workflow/workflow.engine';
+import { AuthenticationError } from '../utils/errors';
+
+function requireUserId(req: Request): string {
+  const userId = req.user?.userId;
+  if (!userId) {
+    throw new AuthenticationError('Authentication required');
+  }
+  return userId;
+}
 
 export class ChatController {
   async createConversation(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { title } = req.body;
-      const userId = req.user?.userId;
+      const userId = requireUserId(req);
       const conversation = await chatService.createConversation(title, userId);
       sendSuccess(res, conversation, 201);
     } catch (error) {
@@ -21,7 +30,7 @@ export class ChatController {
 
   async listConversations(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const userId = req.user?.userId;
+      const userId = requireUserId(req);
       const conversations = await chatService.listConversations(userId);
       sendSuccess(res, conversations);
     } catch (error) {
@@ -31,7 +40,7 @@ export class ChatController {
 
   async getConversation(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const userId = req.user?.userId;
+      const userId = requireUserId(req);
       const conversation = await chatService.getConversation(req.params.id, userId);
       sendSuccess(res, conversation);
     } catch (error) {
@@ -49,7 +58,7 @@ export class ChatController {
   async getConversationActivity(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params;
-      const userId = req.user?.userId;
+      const userId = requireUserId(req);
       // Authorize via getConversation (throws if not authorized)
       await chatService.getConversation(id, userId);
 
@@ -100,7 +109,7 @@ export class ChatController {
 
   async deleteConversation(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const userId = req.user?.userId;
+      const userId = requireUserId(req);
       await chatService.deleteConversation(req.params.id, userId);
       sendSuccess(res, { deleted: true });
     } catch (error) {
@@ -117,6 +126,12 @@ export class ChatController {
         sendError(res, 400, 'Message content is required', 'VALIDATION_ERROR');
         return;
       }
+
+      const userId = requireUserId(req);
+      // Authorize: throws NotFoundError if the conversation doesn't belong to
+      // this user. Without this, any authenticated user could POST messages
+      // into another user's conversation by guessing the conversationId.
+      await chatService.getConversation(id, userId);
 
       const io = getIO();
       const room = `chat:${id}`;
@@ -170,7 +185,7 @@ export class ChatController {
         sendSuccess(res, []);
         return;
       }
-      const userId = req.user?.userId;
+      const userId = requireUserId(req);
       const results = await chatService.searchConversations(q, userId);
       sendSuccess(res, results);
     } catch (error) {
@@ -236,10 +251,12 @@ export class ChatController {
 
   async getFeedbackSummary(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const userId = requireUserId(req);
+      const scope = { message: { conversation: { userId } } };
       const [upCount, downCount, total] = await Promise.all([
-        prisma.messageFeedback.count({ where: { rating: 'up' } }),
-        prisma.messageFeedback.count({ where: { rating: 'down' } }),
-        prisma.messageFeedback.count(),
+        prisma.messageFeedback.count({ where: { ...scope, rating: 'up' } }),
+        prisma.messageFeedback.count({ where: { ...scope, rating: 'down' } }),
+        prisma.messageFeedback.count({ where: scope }),
       ]);
       sendSuccess(res, { total, up: upCount, down: downCount });
     } catch (error) {

@@ -5,9 +5,20 @@
 
 import { Server as HttpServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
+import jwt from 'jsonwebtoken';
 import { logger } from '../utils/logger';
 import { config } from './index';
 import { prisma } from './database';
+
+interface SocketJwtPayload {
+  userId: string;
+  email: string;
+  role: string;
+}
+
+function getJwtSecret(): string {
+  return process.env.JWT_SECRET || 'dev-secret-change-me';
+}
 
 let io: SocketIOServer | null = null;
 
@@ -85,8 +96,24 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
     pingInterval: 25000,
   });
 
+  // Optional JWT parsing on handshake. Sockets without a token still connect
+  // (dashboard broadcast events remain usable), but per-user rooms like
+  // `chat:join` require socket.data.userId to be populated.
+  io.use((socket, next) => {
+    const token = (socket.handshake.auth as { token?: string } | undefined)?.token;
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, getJwtSecret()) as SocketJwtPayload;
+        socket.data.userId = decoded.userId;
+      } catch (err) {
+        logger.debug({ socketId: socket.id }, 'Socket JWT invalid, proceeding unauthenticated');
+      }
+    }
+    next();
+  });
+
   io.on('connection', (socket: Socket) => {
-    logger.info({ socketId: socket.id }, 'WebSocket client connected');
+    logger.info({ socketId: socket.id, userId: socket.data.userId }, 'WebSocket client connected');
 
     // Join default room for broadcast
     socket.join('dashboard');
@@ -120,12 +147,31 @@ export function initializeWebSocket(httpServer: HttpServer): SocketIOServer {
     // workflow:started event lands in a room with zero subscribers.
     socket.on('chat:join', async (conversationId: string, ack?: (result: { joined: boolean; replayed: number; error?: string }) => void) => {
       const room = `chat:${conversationId}`;
+
+      // Authorize: socket must have a JWT-authenticated userId, and the
+      // conversation must belong to that user. Without this check, any
+      // connected client can join any chat room and receive the live
+      // token stream.
+      const socketUserId = socket.data.userId as string | undefined;
+      if (!socketUserId) {
+        ack?.({ joined: false, replayed: 0, error: 'unauthenticated' });
+        return;
+      }
+      const conversation = await prisma.conversation.findUnique({
+        where: { id: conversationId },
+        select: { userId: true },
+      });
+      if (!conversation || conversation.userId !== socketUserId) {
+        ack?.({ joined: false, replayed: 0, error: 'forbidden' });
+        return;
+      }
+
       socket.join(room);
       if (!socketConversations.has(socket.id)) {
         socketConversations.set(socket.id, new Set());
       }
       socketConversations.get(socket.id)!.add(conversationId);
-      logger.debug({ socketId: socket.id, room }, 'Client joined chat room');
+      logger.debug({ socketId: socket.id, room, userId: socketUserId }, 'Client joined chat room');
 
       let replayed = 0;
 
