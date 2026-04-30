@@ -6,8 +6,69 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
-import { GHLInboundMessagePayload } from '../../integrations/ghl/types';
 import { unifiedReplyHandler } from '../../services/reply/unified-reply-handler.service';
+
+interface NormalizedInbound {
+  type: 'InboundMessage' | string;
+  contactId: string;
+  conversationId: string;
+  message: {
+    id: string;
+    type: 'SMS' | 'Email' | string;
+    direction: 'inbound' | 'outbound' | string;
+    body: string;
+  };
+}
+
+/**
+ * Accepts both GHL payload shapes and returns a unified structure:
+ * 1) Native subscription / "Inbound Message" event: nested { type, contactId, message: {...} }
+ * 2) Workflow "Send Webhook" action with Custom Data (flat key-value pairs):
+ *    e.g. { contact_id, message_body, message_type, conversation_id, message_id, ... }
+ *
+ * Returns null when the body has neither shape.
+ */
+function normalizeGhlPayload(body: Record<string, any>): NormalizedInbound | null {
+  if (!body || typeof body !== 'object') return null;
+
+  if (body.type === 'InboundMessage' && body.message && body.contactId) {
+    return body as NormalizedInbound;
+  }
+
+  const contactId = body.contact_id || body.contactId || body['contact.id'];
+  const messageBody =
+    body.message_body || body.body || body.message?.body || body['message.body'];
+  if (!contactId || typeof messageBody !== 'string') return null;
+
+  const rawType: string =
+    body.message_type ||
+    body.type ||
+    body.channel ||
+    body.message?.type ||
+    'SMS';
+  const messageType: 'SMS' | 'Email' =
+    /email/i.test(rawType) ? 'Email' : 'SMS';
+
+  const direction: string =
+    body.message_direction ||
+    body.direction ||
+    body.message?.direction ||
+    'inbound';
+
+  return {
+    type: 'InboundMessage',
+    contactId: String(contactId),
+    conversationId: String(
+      body.conversation_id || body.conversationId || body['conversation.id'] || ''
+    ),
+    message: {
+      id: String(body.message_id || body.messageId || body['message.id'] || ''),
+      type: messageType,
+      direction,
+      body: messageBody,
+    },
+  };
+}
 
 class GHLWebhookController {
   /**
@@ -20,46 +81,56 @@ class GHLWebhookController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const payload = req.body as GHLInboundMessagePayload;
+      const raw = req.body as Record<string, any>;
+
+      logger.info(
+        { rawPayload: raw, headers: { 'content-type': req.get('content-type') } },
+        'Received GHL webhook (raw)'
+      );
+
+      const normalized = normalizeGhlPayload(raw);
+
+      if (!normalized) {
+        logger.warn({ rawPayload: raw }, 'GHL webhook payload could not be normalized');
+        res.status(200).json({ received: true, processed: false, reason: 'unrecognized_payload_shape' });
+        return;
+      }
 
       logger.info(
         {
-          type: payload.type,
-          contactId: payload.contactId,
-          conversationId: payload.conversationId,
+          type: normalized.type,
+          contactId: normalized.contactId,
+          conversationId: normalized.conversationId,
+          messageType: normalized.message.type,
+          messageDirection: normalized.message.direction,
+          bodyLength: normalized.message.body?.length ?? 0,
         },
-        'Received GHL webhook'
+        'Received GHL webhook (normalized)'
       );
 
-      // Only process inbound messages
-      if (payload.type !== 'InboundMessage') {
-        logger.debug({ type: payload.type }, 'Ignoring non-inbound message webhook');
-        res.status(200).json({ received: true, processed: false });
+      if (normalized.type !== 'InboundMessage') {
+        logger.debug({ type: normalized.type }, 'Ignoring non-inbound message webhook');
+        res.status(200).json({ received: true, processed: false, reason: 'not_inbound' });
         return;
       }
 
-      // Only process SMS and Email replies
-      if (payload.message.type !== 'SMS' && payload.message.type !== 'Email') {
+      if (normalized.message.type !== 'SMS' && normalized.message.type !== 'Email') {
         logger.debug(
-          { messageType: payload.message.type },
+          { messageType: normalized.message.type },
           'Ignoring non-SMS/Email message'
         );
-        res.status(200).json({ received: true, processed: false });
+        res.status(200).json({ received: true, processed: false, reason: 'unsupported_channel' });
         return;
       }
 
-      // Only process inbound direction
-      if (payload.message.direction !== 'inbound') {
-        logger.debug({ direction: payload.message.direction }, 'Ignoring outbound message');
-        res.status(200).json({ received: true, processed: false });
+      if (normalized.message.direction !== 'inbound') {
+        logger.debug({ direction: normalized.message.direction }, 'Ignoring outbound message');
+        res.status(200).json({ received: true, processed: false, reason: 'not_inbound_direction' });
         return;
       }
 
-      // Find contact in our database by GHL contact ID
       const contact = await prisma.contact.findFirst({
-        where: {
-          ghlContactId: payload.contactId,
-        },
+        where: { ghlContactId: normalized.contactId },
         select: {
           id: true,
           email: true,
@@ -70,32 +141,31 @@ class GHLWebhookController {
 
       if (!contact) {
         logger.warn(
-          { ghlContactId: payload.contactId },
+          { ghlContactId: normalized.contactId },
           'Contact not found in database for GHL webhook'
         );
-        res.status(200).json({ received: true, processed: false });
+        res.status(200).json({ received: true, processed: false, reason: 'contact_not_found' });
         return;
       }
 
       logger.info(
         {
           contactId: contact.id,
-          ghlContactId: payload.contactId,
-          messageType: payload.message.type,
+          ghlContactId: normalized.contactId,
+          messageType: normalized.message.type,
         },
         'Processing GHL reply'
       );
 
-      // Use unified reply handler
       const result = await unifiedReplyHandler.handleReply({
         contactId: contact.id,
-        channel: payload.message.type === 'SMS' ? 'SMS' : 'EMAIL',
+        channel: normalized.message.type === 'SMS' ? 'SMS' : 'EMAIL',
         source: 'ghl',
-        replyText: payload.message.body,
+        replyText: normalized.message.body,
         metadata: {
-          messageId: payload.message.id,
-          conversationId: payload.conversationId,
-          externalId: payload.message.id,
+          messageId: normalized.message.id,
+          conversationId: normalized.conversationId,
+          externalId: normalized.message.id,
           fromAddress: contact.phone || contact.email || undefined,
         },
       });

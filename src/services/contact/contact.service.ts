@@ -526,6 +526,8 @@ export class ContactService {
           receivedAt: true,
           messageId: true,
           threadId: true,
+          classification: true,
+          classifiedAt: true,
         },
       });
 
